@@ -16,9 +16,9 @@ namespace AngleSharpTest1
             //ExtractTableFromHTML(@"c:\temp\cat_10qx6302017.htm", "Consolidated Statement of Results of Operations", @"c:\temp\cat");
             //ExtractTableFromHTML(@"c:\temp\a17-13367_110q.htm", "CONSOLIDATED STATEMENT OF EARNINGS", @"c:\temp\ibm");
             //ExtractTableFromHTML(@"c:\temp\a10-qq32017712017.htm", "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (Unaudited)", @"c:\temp\apple");
-            //ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", @"c:\temp\deere");
+            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", @"c:\temp\deere");
             //ExtractTableFromHTML(@"c:\temp\mdt-2015q3x10q.htm", "CONDENSED CONSOLIDATED STATEMENTS OF EARNINGS", @"c:\temp\medtronic");
-            ExtractTableFromHTML(@"c:\temp\amzn-20170630x10q.htm", "CONSOLIDATED STATEMENTS OF OPERATIONS", @"c:\temp\amazon");
+            //ExtractTableFromHTML(@"c:\temp\amzn-20170630x10q.htm", "CONSOLIDATED STATEMENTS OF OPERATIONS", @"c:\temp\amazon");
             
         }
 
@@ -104,7 +104,7 @@ namespace AngleSharpTest1
             }
 
             // Do a little clean-up
-            dropCompletelyBlankRows(tableData);
+            // dropCompletelyBlankRows(tableData);
 
             // Save a csv of the Matrix for analysis
             writeTableToFile(outputPath, tableData);
@@ -138,6 +138,20 @@ namespace AngleSharpTest1
                     }
                 }
 
+                // Special handling for rows labeled "Total": find their overarching heading.
+                //  Assumption: a blank row will demarcate the sub-section of the table that this total is for.
+                if (attributeName == "Total")
+                {
+                    int iSuperHead = 0;
+                    for (iSuperHead = iRow; iSuperHead > 0 && tableData[iSuperHead][0].Text.Length > 0; --iSuperHead)
+                        ;
+                    if (tableData[iSuperHead][0].Text.Length == 0)
+                    {
+                        ++iSuperHead;
+                    }
+                    attributeName = attributeName + ": " + tableData[iSuperHead][0].Text;
+                }
+
 
                 // Scan columns
                 string colContent = "";
@@ -155,8 +169,7 @@ namespace AngleSharpTest1
                     // Fix up chars in col content
                     colContent = colContent.Replace('(', '-').Replace(")", "").Replace(",", "");     // Parens = -, drop commas.
 
-                    // Get the heading for this col.  ASSUMTPION: Column headings are first non blank cell in the col of interest, 
-                    //    and (QUESTIONABLE ASSUMPTION) also the one immediately below that if not blank.
+                    // Get the heading for this col.  ASSUMTPION: Column headings are first contiguous cells with centered text.
                     string heading = "";
                     bool centeredCellFound = false;
                     for (int ir = 0; ir < tableData.Count; ++ir)
@@ -178,6 +191,36 @@ namespace AngleSharpTest1
                                 if (centeredCellFound)
                                 {
                                     break;
+                                }
+                            }
+                        }
+                    }
+
+                    // MAKE SURE THIS IS GENERALLY APPLICABLE!!!
+                    // When headings are just a year then the actual time range they represent is often elsewhere in the table.
+                    if (heading.StartsWith("20") && heading.Length == 4)
+                    {
+                        // Look for more detail about what these points in time mean elsewhere in the table.  See Deere 10Q.
+                        foreach(var row2 in tableData)
+                        {
+                            TableCell cell = row2[0];
+                            string cellTextLower = cell.Text.ToLower();
+
+                            // Assumption for now: these explanations are in column 0
+                            Match mMonths = Regex.Match(cellTextLower, @"(\w*) months ended");
+                            if (mMonths.Success)
+                            {
+                                string numMonths = mMonths.Groups[1].Captures[0].Value;
+                                numMonths = numMonths.Substring(0, 1).ToUpper() + numMonths.Substring(1);
+
+                                Match mDate = Regex.Match(cellTextLower, @"(\w+) (\d+)?, " + heading);
+                                if (mDate.Success)
+                                {
+                                    string month = mDate.Groups[1].Captures[0].Value;
+                                    month = month.Substring(0, 1).ToUpper() + month.Substring(1);
+                                    string dayOfMonth = mDate.Groups[2].Captures[0].Value;
+
+                                    heading = numMonths + " months ended " + month + " " + dayOfMonth + ", " + heading;
                                 }
                             }
                         }
