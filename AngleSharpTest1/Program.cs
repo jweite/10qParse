@@ -13,13 +13,15 @@ namespace AngleSharpTest1
     {
         static void Main(string[] args)
         {
-            //ExtractTableFromHTML(@"c:\temp\cat_10qx6302017.htm", "Consolidated Statement of Results of Operations", @"c:\temp\cat");
-            //ExtractTableFromHTML(@"c:\temp\a17-13367_110q.htm", "CONSOLIDATED STATEMENT OF EARNINGS", @"c:\temp\ibm");
-            //ExtractTableFromHTML(@"c:\temp\a10-qq32017712017.htm", "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (Unaudited)", @"c:\temp\apple");
+            ExtractTableFromHTML(@"c:\temp\cat_10qx6302017.htm", "Consolidated Statement of Results of Operations", @"c:\temp\cat");
+            ExtractTableFromHTML(@"c:\temp\a17-13367_110q.htm", "CONSOLIDATED STATEMENT OF EARNINGS", @"c:\temp\ibm");
+            ExtractTableFromHTML(@"c:\temp\a10-qq32017712017.htm", "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (Unaudited)", @"c:\temp\apple");
             ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", @"c:\temp\deere");
-            //ExtractTableFromHTML(@"c:\temp\mdt-2015q3x10q.htm", "CONDENSED CONSOLIDATED STATEMENTS OF EARNINGS", @"c:\temp\medtronic");
-            //ExtractTableFromHTML(@"c:\temp\amzn-20170630x10q.htm", "CONSOLIDATED STATEMENTS OF OPERATIONS", @"c:\temp\amazon");
-            
+            ExtractTableFromHTML(@"c:\temp\mdt-2015q3x10q.htm", "CONDENSED CONSOLIDATED STATEMENTS OF EARNINGS", @"c:\temp\medtronic");
+            ExtractTableFromHTML(@"c:\temp\amzn-20170630x10q.htm", "CONSOLIDATED STATEMENTS OF OPERATIONS", @"c:\temp\amazon");
+
+            Console.Write("Done. Press enter to exit");
+            Console.ReadLine();
         }
 
 
@@ -67,8 +69,6 @@ namespace AngleSharpTest1
             if (foundTable == null)
             {
                 Console.WriteLine("No landmarked table found");
-                Console.WriteLine("Press enter to exit");
-                Console.ReadLine();
                 return;
             }
 
@@ -103,11 +103,15 @@ namespace AngleSharpTest1
                 tableData.Add(rowData);
             }
 
-            // Do a little clean-up
-            // dropCompletelyBlankRows(tableData);
-
             // Save a csv of the Matrix for analysis
             writeTableToFile(outputPath, tableData);
+
+            // Extract Headings
+            IList<string> headings = ExtractHeadings(tableData);
+            if (headings == null)
+            {
+                Console.WriteLine("FATAL: Cannot find any qualifying heading rows in table");
+            }
 
             // Flatten matrix it with some rules
             List<FlattenedRow> results = new List<FlattenedRow>();
@@ -160,8 +164,8 @@ namespace AngleSharpTest1
                     var col = row[iCol];
                     colContent = col.Text;
 
-                    // Process numeric columns only.
-                    if (!Regex.IsMatch(colContent, @"\(?\d+\)?"))
+                    // Process numeric columns only.  Exclude centered (heading) cols.
+                    if (col.HorizontalAlignment == TableCell.HORIZONTAL_ALIGNMENT.CENTER || !Regex.IsMatch(colContent, @"\(?\d+\)?"))
                     {
                         continue;
                     }
@@ -170,61 +174,7 @@ namespace AngleSharpTest1
                     colContent = colContent.Replace('(', '-').Replace(")", "").Replace(",", "");     // Parens = -, drop commas.
 
                     // Get the heading for this col.  ASSUMTPION: Column headings are first contiguous cells with centered text.
-                    string heading = "";
-                    bool centeredCellFound = false;
-                    for (int ir = 0; ir < tableData.Count; ++ir)
-                    {
-                        TableCell cell = tableData[ir][iCol];
-                        if (cell.Text.Length > 0)
-                        {
-                            if (cell.HorizontalAlignment == TableCell.HORIZONTAL_ALIGNMENT.CENTER)
-                            {
-                                if (heading.Length > 0)
-                                {
-                                    heading += " ";
-                                }
-                                heading += cell.Text;
-                                centeredCellFound = true;
-                            }
-                            else
-                            {
-                                if (centeredCellFound)
-                                {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // MAKE SURE THIS IS GENERALLY APPLICABLE!!!
-                    // When headings are just a year then the actual time range they represent is often elsewhere in the table.
-                    if (heading.StartsWith("20") && heading.Length == 4)
-                    {
-                        // Look for more detail about what these points in time mean elsewhere in the table.  See Deere 10Q.
-                        foreach(var row2 in tableData)
-                        {
-                            TableCell cell = row2[0];
-                            string cellTextLower = cell.Text.ToLower();
-
-                            // Assumption for now: these explanations are in column 0
-                            Match mMonths = Regex.Match(cellTextLower, @"(\w*) months ended");
-                            if (mMonths.Success)
-                            {
-                                string numMonths = mMonths.Groups[1].Captures[0].Value;
-                                numMonths = numMonths.Substring(0, 1).ToUpper() + numMonths.Substring(1);
-
-                                Match mDate = Regex.Match(cellTextLower, @"(\w+) (\d+)?, " + heading);
-                                if (mDate.Success)
-                                {
-                                    string month = mDate.Groups[1].Captures[0].Value;
-                                    month = month.Substring(0, 1).ToUpper() + month.Substring(1);
-                                    string dayOfMonth = mDate.Groups[2].Captures[0].Value;
-
-                                    heading = numMonths + " months ended " + month + " " + dayOfMonth + ", " + heading;
-                                }
-                            }
-                        }
-                    }
+                    string heading = headings[iCol];
 
                     FlattenedRow flatRow = new FlattenedRow(attributeName, heading, colContent);
                     results.Add(flatRow);
@@ -247,9 +197,137 @@ namespace AngleSharpTest1
                     fsw.Write(record + "\r\n");
                 }
             }
+        }
 
-            Console.Write("Done. Press enter to exit");
-            Console.ReadLine();
+        public static List<string> ExtractHeadings(List<List<TableCell>> tableData)
+        {
+            // Find first heading row
+            int iRow = 0;
+            for (iRow = 0; iRow < tableData.Count; ++iRow)
+            {
+                var row = tableData[iRow];
+                bool foundCenteredCell = false;
+                foreach (var cell in row)
+                {
+                    if (cell.HorizontalAlignment == TableCell.HORIZONTAL_ALIGNMENT.CENTER)
+                    {
+                        foundCenteredCell = true;
+                        break;
+                    }
+                }
+                if (foundCenteredCell)
+                {
+                    break;
+                }
+            }
+            if (iRow >= tableData.Count)
+            {
+                return null;
+            }
+
+            // For each cell in the first heading row, build the full heading from the centered cells below it and add to list.
+            List<string> headings = new List<string>();
+            bool centeredCellFound = false;
+            for (int iCol = 0; iCol < tableData[iRow].Count; ++iCol)
+            {
+                string heading = "";
+                for (int ir = iRow; ir < tableData.Count; ++ir)
+                {
+                    TableCell cell = tableData[ir][iCol];
+                    if (cell.Text.Length > 0)
+                    {
+                        if (cell.HorizontalAlignment == TableCell.HORIZONTAL_ALIGNMENT.CENTER)
+                        {
+                            if (heading.Length > 0)
+                            {
+                                heading += " ";
+                            }
+                            heading += cell.Text;
+                            centeredCellFound = true;
+                        }
+                        else
+                        {
+                            if (centeredCellFound)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // MAKE SURE THIS IS GENERALLY APPLICABLE!!!
+                // When headings are just a year then the actual time range they represent is often elsewhere in the table.
+                if (heading.StartsWith("20") && heading.Length == 4)
+                {
+                    // Look for more detail about what these points in time mean elsewhere in the table.  See Deere 10Q.
+                    foreach (var row2 in tableData)
+                    {
+                        TableCell cell = row2[0];
+                        string cellTextLower = cell.Text.ToLower();
+
+                        // Assumption for now: these explanations are in column 0
+                        Match mMonths = Regex.Match(cellTextLower, @"(\w*) months ended");
+                        if (mMonths.Success)
+                        {
+                            string numMonths = mMonths.Groups[1].Captures[0].Value;
+                            numMonths = numMonths.Substring(0, 1).ToUpper() + numMonths.Substring(1);
+
+                            Match mDate = Regex.Match(cellTextLower, @"(\w+) (\d+)?, " + heading);
+                            if (mDate.Success)
+                            {
+                                string month = mDate.Groups[1].Captures[0].Value;
+                                month = month.Substring(0, 1).ToUpper() + month.Substring(1);
+                                string dayOfMonth = mDate.Groups[2].Captures[0].Value;
+
+                                heading = numMonths + " months ended " + month + " " + dayOfMonth + ", " + heading;
+                            }
+                        }
+                    }
+                }
+
+                heading = NormalizeTimeRangeHeading(heading);
+
+                headings.Add(heading);
+            }
+            return headings;
+        }
+
+        public static string ConvertToTitleCase(string s)
+        {
+            char prevChar = ' ';
+            StringBuilder builder = new StringBuilder();
+
+            foreach (char c in s.ToCharArray())
+            {
+                if (prevChar == ' ' || prevChar == '\t' || prevChar == '\n' || prevChar == '\r')
+                {
+                    builder.Append(c.ToString().ToUpper().ToCharArray()[0]);
+                }
+                else
+                {
+                    builder.Append(c);
+                }
+                prevChar = c;
+            }
+
+            return builder.ToString();
+        }
+
+        public static string NormalizeTimeRangeHeading(string heading)
+        {
+            string result = heading;
+
+            Match mMonths = Regex.Match(heading.ToLower(), @"(\w+) months end");    // Allows for ended and ending...
+            if (mMonths.Success)
+            {
+                Match mDate = Regex.Match(heading, @"(\w+)\s+(\d+),?\s+20(\d\d)"); // Month Day, Year
+                if (mDate.Success)
+                {
+                    result = mMonths.Groups[1].Captures[0].Value + " months ending " + mDate.Groups[1].Captures[0].Value + " " + mDate.Groups[2].Captures[0].Value + ", 20" + mDate.Groups[3].Captures[0].Value;
+                    return ConvertToTitleCase(result);
+                }
+            }
+            return result;  // If we can't find the expected elements do nothing.
         }
 
 
@@ -265,28 +343,6 @@ namespace AngleSharpTest1
                     }
                     fsw.WriteLine();
 
-                }
-            }
-        }
-
-        static private void dropCompletelyBlankRows(List<List<TableCell>> table)
-        {
-            for (int i = table.Count - 1; i >= 0; --i)
-            {
-                var row = table[i];
-                bool rowHasContent = false;
-
-                foreach (var col in row)
-                {
-                    if (col.Text.Length > 0)
-                    {
-                        rowHasContent = true;
-                        break;
-                    }
-                }
-                if (!rowHasContent)
-                {
-                    table.RemoveAt(i);
                 }
             }
         }
