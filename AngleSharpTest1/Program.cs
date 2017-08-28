@@ -13,12 +13,13 @@ namespace AngleSharpTest1
     {
         static void Main(string[] args)
         {
-            ExtractTableFromHTML(@"c:\temp\cat_10qx6302017.htm", "Consolidated Statement of Results of Operations", @"c:\temp\cat");
+//            ExtractTableFromHTML(@"c:\temp\cat_10qx6302017.htm", "Consolidated Statement of Results of Operations", @"c:\temp\cat");
             ExtractTableFromHTML(@"c:\temp\a17-13367_110q.htm", "CONSOLIDATED STATEMENT OF EARNINGS", @"c:\temp\ibm");
-            ExtractTableFromHTML(@"c:\temp\a10-qq32017712017.htm", "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (Unaudited)", @"c:\temp\apple");
-            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", @"c:\temp\deere");
-            ExtractTableFromHTML(@"c:\temp\mdt-2015q3x10q.htm", "CONDENSED CONSOLIDATED STATEMENTS OF EARNINGS", @"c:\temp\medtronic");
-            ExtractTableFromHTML(@"c:\temp\amzn-20170630x10q.htm", "CONSOLIDATED STATEMENTS OF OPERATIONS", @"c:\temp\amazon");
+//            ExtractTableFromHTML(@"c:\temp\a10-qq32017712017.htm", "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (Unaudited)", @"c:\temp\apple");
+//            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", @"c:\temp\deere_consolidated_income");
+//            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "CONDENSED CONSOLIDATED BALANCE SHEET", @"c:\temp\deere_balance");
+//            ExtractTableFromHTML(@"c:\temp\mdt-2015q3x10q.htm", "CONDENSED CONSOLIDATED STATEMENTS OF EARNINGS", @"c:\temp\medtronic");
+//            ExtractTableFromHTML(@"c:\temp\amzn-20170630x10q.htm", "CONSOLIDATED STATEMENTS OF OPERATIONS", @"c:\temp\amazon");
 
             Console.Write("Done. Press enter to exit");
             Console.ReadLine();
@@ -73,11 +74,11 @@ namespace AngleSharpTest1
             }
 
             // Parse HTML table into matrix (2d row-oriented list of lists)
-            var tableData = new List<List<TableCell>>();
+            var tableData = new List<TableRow>();
             var rowElements = foundTable.QuerySelectorAll("TR");
             foreach (var rowElement in rowElements)
             {
-                var rowData = new List<TableCell>();
+                var rowData = new TableRow();
 
                 var colElements = rowElement.QuerySelectorAll("TD");
                 foreach (var cellElement in colElements)
@@ -96,7 +97,7 @@ namespace AngleSharpTest1
                     }
                     for (int j = 0; j < colSpan; ++j)
                     {
-                        rowData.Add(tableCell);
+                        rowData.AddCell(tableCell);
                     }
                 }
 
@@ -107,23 +108,35 @@ namespace AngleSharpTest1
             writeTableToFile(outputPath, tableData);
 
             // Extract Headings
-            IList<string> headings = ExtractHeadings(tableData);
-            if (headings == null)
+            IList<string> columnHeadings = ExtractColumnHeadings(tableData);
+            if (columnHeadings == null)
             {
                 Console.WriteLine("FATAL: Cannot find any qualifying heading rows in table");
             }
 
-            // Flatten matrix it with some rules
+            CalcRowheadIndentationLevels(tableData);        // Calculate the relative indentation level of each rowhead vs the rest.
+
+            BuildComplexRowHeads(tableData);
+
+
+            // Flatten matrix with some rules
             List<FlattenedRow> results = new List<FlattenedRow>();
             string attributeName = "";
 
             for (int iRow = 0; iRow < tableData.Count; ++iRow) {
                 var row = tableData[iRow];
 
-                int nCols = row.Count;
+                int nCols = row.Cells.Count;
 
-                // Assumption 1: attribute name is in column 0.
-                attributeName = row[0].Text.Replace(":", "");
+                attributeName = row.RowHead.Text;
+
+                TableRow row2 = row.parentRow;
+                while (row2 != null)
+                {
+                    attributeName = row2.RowHead.Text + "|" + attributeName;
+                    row2 = row2.parentRow;
+                }
+
                 if (attributeName.Length == 0) continue;    // Assumption: rows without attribute names should be skipped.
 
                 // Special handling for rows labeled Basic or Diluted: find their overarching heading.
@@ -132,13 +145,13 @@ namespace AngleSharpTest1
                 {
                     
                     int iSuperHead = iRow - 1;
-                    if (tableData[iSuperHead][0].Text == "Basic" || tableData[iSuperHead][0].Text == "Diluted")
+                    if (tableData[iSuperHead].Cells[0].Text == "Basic" || tableData[iSuperHead].Cells[0].Text == "Diluted")
                     {
                         --iSuperHead;
                     }
                     if (iSuperHead > 0)
                     {
-                        attributeName = tableData[iSuperHead][0].Text + " " + attributeName;
+                        attributeName = tableData[iSuperHead].Cells[0].Text + " - " + attributeName;
                     }
                 }
 
@@ -147,21 +160,24 @@ namespace AngleSharpTest1
                 if (attributeName == "Total")
                 {
                     int iSuperHead = 0;
-                    for (iSuperHead = iRow; iSuperHead > 0 && tableData[iSuperHead][0].Text.Length > 0; --iSuperHead)
+                    for (iSuperHead = iRow; iSuperHead > 0 && tableData[iSuperHead].Cells[0].Text.Length > 0; --iSuperHead)
                         ;
-                    if (tableData[iSuperHead][0].Text.Length == 0)
+                    if (tableData[iSuperHead].Cells[0].Text.Length == 0)
                     {
                         ++iSuperHead;
                     }
-                    attributeName = attributeName + ": " + tableData[iSuperHead][0].Text;
+                    attributeName = attributeName + ": " + tableData[iSuperHead].Cells[0].Text;
                 }
+
+                // Standardize attribute: only single spaces between words
+                attributeName = ConsolidateWhitespace(attributeName);
 
 
                 // Scan columns
                 string colContent = "";
                 for (int iCol = 1; iCol < nCols; ++iCol)
                 {
-                    var col = row[iCol];
+                    var col = row.Cells[iCol];
                     colContent = col.Text;
 
                     // Process numeric columns only.  Exclude centered (heading) cols.
@@ -174,7 +190,7 @@ namespace AngleSharpTest1
                     colContent = colContent.Replace('(', '-').Replace(")", "").Replace(",", "");     // Parens = -, drop commas.
 
                     // Get the heading for this col.  ASSUMTPION: Column headings are first contiguous cells with centered text.
-                    string heading = headings[iCol];
+                    string heading = columnHeadings[iCol];
 
                     FlattenedRow flatRow = new FlattenedRow(attributeName, heading, colContent);
                     results.Add(flatRow);
@@ -199,7 +215,83 @@ namespace AngleSharpTest1
             }
         }
 
-        public static List<string> ExtractHeadings(List<List<TableCell>> tableData)
+        public static void CalcRowheadIndentationLevels(List<TableRow> tableData)
+        {
+            // Find rowHead distinct indentation levels
+            var distinctIndentationLevels = tableData
+                .GroupBy(row => row.RowHead.Indentation)
+                .Select(group => group.First().RowHead.Indentation)
+                .OrderBy(indentationLevel => indentationLevel);
+
+            int indentatationLevel = 0;
+            Dictionary<double, int> distinctIndentationLevelDict = new Dictionary<double, int>();
+            foreach (double d in distinctIndentationLevels)
+            {
+                distinctIndentationLevelDict.Add(d, indentatationLevel++);
+            }
+
+            foreach (var row in tableData)
+            {
+                row.RowHead.IndentationLevel = distinctIndentationLevelDict[row.RowHead.Indentation];
+            }
+        }
+
+        public static void BuildComplexRowHeads(List<TableRow> tableData)
+        {
+            for (int iRow = 0; iRow < tableData.Count; ++iRow)
+            {
+                var row = tableData[iRow];
+
+                // If this rowhead is indented make the first preceeding row at a less indentation level its parent.
+                if (row.RowHead.IndentationLevel > 0)
+                {
+                    for (int iRowInner = iRow - 1; iRowInner >= 0; --iRowInner)
+                    {
+                        if (row.RowHead.Text == "Total")
+                        {
+                            // An undifferentiatated "Total" may be the child of a head at its own indentation level.
+                            if (tableData[iRowInner].RowHead.IndentationLevel <= row.RowHead.IndentationLevel)
+                            {
+                                row.parentRow = tableData[iRowInner];
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            if (tableData[iRowInner].RowHead.IndentationLevel < row.RowHead.IndentationLevel)
+                            {
+                                row.parentRow = tableData[iRowInner];
+                                break;
+                            }
+                        }
+                    }
+                }
+                // If not indented, not bold and has content make previous bold row without content its parent.
+                else if (!row.RowHead.Bold && row.bRowCellsHaveContent)
+                {
+                    for (int iRowInner = iRow - 1; iRowInner >= 0; --iRowInner)
+                    {
+                        var possibleParent = tableData[iRowInner];
+                        if (possibleParent.RowHead.Bold)
+                        {
+                            if (!possibleParent.bRowCellsHaveContent)
+                            {
+                                row.parentRow = possibleParent;
+                                break;
+                            }
+                            else
+                            {
+                                break;      // If the preceeding bold row DOES have content it's not a parent, and curr row is considered to stand alone.
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+
+
+        public static List<string> ExtractColumnHeadings(List<TableRow> tableData)
         {
             // Find first heading row
             int iRow = 0;
@@ -207,7 +299,7 @@ namespace AngleSharpTest1
             {
                 var row = tableData[iRow];
                 bool foundCenteredCell = false;
-                foreach (var cell in row)
+                foreach (var cell in row.Cells)
                 {
                     if (cell.HorizontalAlignment == TableCell.HORIZONTAL_ALIGNMENT.CENTER)
                     {
@@ -228,12 +320,12 @@ namespace AngleSharpTest1
             // For each cell in the first heading row, build the full heading from the centered cells below it and add to list.
             List<string> headings = new List<string>();
             bool centeredCellFound = false;
-            for (int iCol = 0; iCol < tableData[iRow].Count; ++iCol)
+            for (int iCol = 0; iCol < tableData[iRow].Cells.Count; ++iCol)
             {
                 string heading = "";
                 for (int ir = iRow; ir < tableData.Count; ++ir)
                 {
-                    TableCell cell = tableData[ir][iCol];
+                    TableCell cell = tableData[ir].Cells[iCol];
                     if (cell.Text.Length > 0)
                     {
                         if (cell.HorizontalAlignment == TableCell.HORIZONTAL_ALIGNMENT.CENTER)
@@ -262,7 +354,7 @@ namespace AngleSharpTest1
                     // Look for more detail about what these points in time mean elsewhere in the table.  See Deere 10Q.
                     foreach (var row2 in tableData)
                     {
-                        TableCell cell = row2[0];
+                        TableCell cell = row2.Cells[0];
                         string cellTextLower = cell.Text.ToLower();
 
                         // Assumption for now: these explanations are in column 0
@@ -330,14 +422,19 @@ namespace AngleSharpTest1
             return result;  // If we can't find the expected elements do nothing.
         }
 
+        public static string ConsolidateWhitespace(string s)
+        {
+            return Regex.Replace(s, @"\s+", " ");
+        }
 
-        static private void writeTableToFile(string outputPath, List<List<TableCell>> table)
+
+        static private void writeTableToFile(string outputPath, List<TableRow> table)
         {
             using (StreamWriter fsw = File.CreateText(outputPath + "_tbl.csv"))
             {
                 foreach (var row in table)
                 {
-                    foreach (var cell in row)
+                    foreach (var cell in row.Cells)
                     {
                         fsw.Write(cell.Text + '\t');
                     }
@@ -348,19 +445,21 @@ namespace AngleSharpTest1
         }
     }
 
-    class TableCell
+    public class TableCell
     {
         public string Text;
         public enum HORIZONTAL_ALIGNMENT { UNKNOWN, LEFT, CENTER, RIGHT };
         public HORIZONTAL_ALIGNMENT HorizontalAlignment;
-        public int Indentation;
+        public double Indentation;      // Dimensionless.  May be px, may be pt.
+        public int IndentationLevel;    // Relative to all indentations of this column
         public bool Bold;
 
         public TableCell(AngleSharp.Dom.IElement element = null)
         {
             Text = "";
             HorizontalAlignment = HORIZONTAL_ALIGNMENT.UNKNOWN;
-            Indentation = 0;
+            Indentation = 0.0;
+            IndentationLevel = 0;
             Bold = false;
 
             if (element != null)
@@ -402,14 +501,24 @@ namespace AngleSharpTest1
                 Bold = true;
             }
 
-            if (element.Style.PaddingBottom.Length > 0)
+            // Questionable assumption: html authors don't mix px and pt dimensions in the same page...  
+            if (element.Style.PaddingLeft.Length > 0)
             {
-                int leftPad = 0;
-                Int32.TryParse(element.Style.PaddingBottom.Replace("px", ""), out leftPad);
-                if (leftPad > this.Indentation)
-                {
-                    this.Indentation = leftPad;
-                }
+                double leftPad = 0;
+                Double.TryParse(element.Style.PaddingLeft.Replace("px", "").Replace("pt", ""), out leftPad);
+                this.Indentation += leftPad;
+            }
+            if (element.Style.MarginLeft.Length > 0)
+            {
+                double leftMargin = 0;
+                Double.TryParse(element.Style.MarginLeft.Replace("px", "").Replace("pt", ""), out leftMargin);
+                this.Indentation += leftMargin;
+            }
+            if (element.Style.TextIndent.Length > 0)
+            {
+                double textIndent = 0;
+                Double.TryParse(element.Style.TextIndent.Replace("px", "").Replace("pt", ""), out textIndent);
+                this.Indentation += textIndent;
             }
 
             // Iterate over this element's children, recursing down the branches of each.
@@ -436,6 +545,47 @@ namespace AngleSharpTest1
                 return Regex.IsMatch(CleanedNumericText, @"\(?\d+\)?");
             }
         }
+    }
+
+    public class TableRow
+    {
+        public TableRow()
+        {
+            RowHead = null;
+            Cells = new List<TableCell>();
+            bRowCellsHaveContent = false;
+            parentRow = null;
+        }
+
+        public void AddCell(TableCell cell)
+        {
+            // First TableCell added to a row is the RowHead
+            if (RowHead == null)
+            {
+                RowHead = cell;
+                RowHead.Text = RowHead.Text.Trim();
+                if (RowHead.Text.EndsWith(":"))
+                {
+                    RowHead.Text = RowHead.Text.Substring(0, RowHead.Text.Length - 1);
+                }
+            }
+            else
+            {
+                Cells.Add(cell);
+
+                if (cell.Text.Length > 0)
+                {
+                    bRowCellsHaveContent = true;
+                }
+            }
+
+        }
+
+        public TableCell RowHead;
+        public List<TableCell> Cells;
+        public bool bRowCellsHaveContent;
+        public TableRow parentRow;
+
     }
 
 
