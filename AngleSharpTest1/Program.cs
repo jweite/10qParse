@@ -15,8 +15,8 @@ namespace AngleSharpTest1
         {
 //            ExtractTableFromHTML(@"c:\temp\cat_10qx6302017.htm", "Consolidated Statement of Results of Operations", @"c:\temp\cat");
             ExtractTableFromHTML(@"c:\temp\a17-13367_110q.htm", "CONSOLIDATED STATEMENT OF EARNINGS", @"c:\temp\ibm");
-//            ExtractTableFromHTML(@"c:\temp\a10-qq32017712017.htm", "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (Unaudited)", @"c:\temp\apple");
-//            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", @"c:\temp\deere_consolidated_income");
+            ExtractTableFromHTML(@"c:\temp\a10-qq32017712017.htm", "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (Unaudited)", @"c:\temp\apple");
+            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", @"c:\temp\deere_consolidated_income");
 //            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "CONDENSED CONSOLIDATED BALANCE SHEET", @"c:\temp\deere_balance");
 //            ExtractTableFromHTML(@"c:\temp\mdt-2015q3x10q.htm", "CONDENSED CONSOLIDATED STATEMENTS OF EARNINGS", @"c:\temp\medtronic");
 //            ExtractTableFromHTML(@"c:\temp\amzn-20170630x10q.htm", "CONSOLIDATED STATEMENTS OF OPERATIONS", @"c:\temp\amazon");
@@ -131,7 +131,7 @@ namespace AngleSharpTest1
                 attributeName = row.RowHead.Text;
 
                 TableRow row2 = row.parentRow;
-                while (row2 != null)
+                while (row2 != null && row2.RowHead.Text.Length > 0)
                 {
                     attributeName = row2.RowHead.Text + "|" + attributeName;
                     row2 = row2.parentRow;
@@ -141,33 +141,33 @@ namespace AngleSharpTest1
 
                 // Special handling for rows labeled Basic or Diluted: find their overarching heading.
                 //   Assumption:  Rows labeled only "Basic" and "Diluted" are futher identified by the heading immediately above them that's not "Basic" or "Diluted".
-                if (attributeName == "Basic" || attributeName == "Diluted")
-                {
+                //if (attributeName == "Basic" || attributeName == "Diluted")
+                //{
                     
-                    int iSuperHead = iRow - 1;
-                    if (tableData[iSuperHead].Cells[0].Text == "Basic" || tableData[iSuperHead].Cells[0].Text == "Diluted")
-                    {
-                        --iSuperHead;
-                    }
-                    if (iSuperHead > 0)
-                    {
-                        attributeName = tableData[iSuperHead].Cells[0].Text + " - " + attributeName;
-                    }
-                }
+                //    int iSuperHead = iRow - 1;
+                //    if (tableData[iSuperHead].Cells[0].Text == "Basic" || tableData[iSuperHead].Cells[0].Text == "Diluted")
+                //    {
+                //        --iSuperHead;
+                //    }
+                //    if (iSuperHead > 0)
+                //    {
+                //        attributeName = tableData[iSuperHead].Cells[0].Text + " - " + attributeName;
+                //    }
+                //}
 
-                // Special handling for rows labeled "Total": find their overarching heading.
-                //  Assumption: a blank row will demarcate the sub-section of the table that this total is for.
-                if (attributeName == "Total")
-                {
-                    int iSuperHead = 0;
-                    for (iSuperHead = iRow; iSuperHead > 0 && tableData[iSuperHead].Cells[0].Text.Length > 0; --iSuperHead)
-                        ;
-                    if (tableData[iSuperHead].Cells[0].Text.Length == 0)
-                    {
-                        ++iSuperHead;
-                    }
-                    attributeName = attributeName + ": " + tableData[iSuperHead].Cells[0].Text;
-                }
+                //// Special handling for rows labeled "Total": find their overarching heading.
+                ////  Assumption: a blank row will demarcate the sub-section of the table that this total is for.
+                //if (attributeName == "Total")
+                //{
+                //    int iSuperHead = 0;
+                //    for (iSuperHead = iRow; iSuperHead > 0 && tableData[iSuperHead].Cells[0].Text.Length > 0; --iSuperHead)
+                //        ;
+                //    if (tableData[iSuperHead].Cells[0].Text.Length == 0)
+                //    {
+                //        ++iSuperHead;
+                //    }
+                //    attributeName = attributeName + ": " + tableData[iSuperHead].Cells[0].Text;
+                //}
 
                 // Standardize attribute: only single spaces between words
                 attributeName = ConsolidateWhitespace(attributeName);
