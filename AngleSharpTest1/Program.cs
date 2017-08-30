@@ -13,38 +13,63 @@ namespace AngleSharpTest1
     {
         static void Main(string[] args)
         {
-//            ExtractTableFromHTML(@"c:\temp\cat_10qx6302017.htm", "Consolidated Statement of Results of Operations", @"c:\temp\cat");
-            ExtractTableFromHTML(@"c:\temp\a17-13367_110q.htm", "CONSOLIDATED STATEMENT OF EARNINGS", @"c:\temp\ibm");
-            ExtractTableFromHTML(@"c:\temp\a10-qq32017712017.htm", "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (Unaudited)", @"c:\temp\apple");
-            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", @"c:\temp\deere_consolidated_income");
-//            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "CONDENSED CONSOLIDATED BALANCE SHEET", @"c:\temp\deere_balance");
-//            ExtractTableFromHTML(@"c:\temp\mdt-2015q3x10q.htm", "CONDENSED CONSOLIDATED STATEMENTS OF EARNINGS", @"c:\temp\medtronic");
-//            ExtractTableFromHTML(@"c:\temp\amzn-20170630x10q.htm", "CONSOLIDATED STATEMENTS OF OPERATIONS", @"c:\temp\amazon");
+            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", 1, @"c:\temp\deere_consolidated_income_3mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
+            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED COMPREHENSIVE INCOME", 1, @"c:\temp\deere_consolidated_comprehensive_income_3mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
+            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", 2, @"c:\temp\deere_consolidated_income_6mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
+            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED COMPREHENSIVE INCOME", 2, @"c:\temp\deere_consolidated_comprehensive_income_6mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
+            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "CONDENSED CONSOLIDATED BALANCE SHEET", 1, @"c:\temp\deere_balance", null);
+            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED CASH FLOWS", 1, @"c:\temp\deere_cashflow_6mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
+
+            ExtractTableFromHTML(@"c:\temp\cat_10qx6302017.htm", "Consolidated Statement of Results of Operations", 1, @"c:\temp\cat", null);
+            ExtractTableFromHTML(@"c:\temp\a17-13367_110q.htm", "CONSOLIDATED STATEMENT OF EARNINGS", 1, @"c:\temp\ibm", null);
+            ExtractTableFromHTML(@"c:\temp\a10-qq32017712017.htm", "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (Unaudited)", 1, @"c:\temp\apple", null);
+            ExtractTableFromHTML(@"c:\temp\mdt-2015q3x10q.htm", "CONDENSED CONSOLIDATED STATEMENTS OF EARNINGS", 1, @"c:\temp\medtronic", null);
+            ExtractTableFromHTML(@"c:\temp\amzn-20170630x10q.htm", "CONSOLIDATED STATEMENTS OF OPERATIONS", 1, @"c:\temp\amazon", null);
 
             Console.Write("Done. Press enter to exit");
             Console.ReadLine();
         }
 
 
-        public static void ExtractTableFromHTML(string sourcePath, string landmark, string outputPath)
+        public static void ExtractTableFromHTML(string sourcePath, string landmark, int landmarkIndex, string outputPath, IDictionary<string, string> config)
         {
-            var config = Configuration.Default.WithCss();
-            var parser = new AngleSharp.Parser.Html.HtmlParser(config);
+            // Set up angleSharp html parser
+            var angleSharConfig = Configuration.Default.WithCss();
+            var parser = new AngleSharp.Parser.Html.HtmlParser(angleSharConfig);
 
+            // Read the source html file
             FileStream fs = File.OpenRead(sourcePath);
 
+            // Parse it into a DOM with AngleSharp
             var doc = parser.Parse(fs);
 
+            // Select all the DOM's elements
             var tableSelector = doc.QuerySelectorAll("*");
+
+            // Look for the specified occurence (landmarkIndex), and find the table related to it.  
+            //  The related table is either the table containing the landmark (if the landmark is contained in a table) 
+            //  or the table immeiately following the landmark (if the landmark isn't contained in a table)
+            //  The below is a bit of a state machine, with the bool foundLandmark and in landmarkIndex controlling how it behaves
+            //  as it scans the elements sequentially.
 
             bool foundLandmark = false;
             AngleSharp.Dom.IElement foundTable = null;
-
-            foreach(var element in tableSelector)
+            for (int iElement = 0; iElement < tableSelector.Length; ++iElement)
             {
+                var element = tableSelector[iElement];
+
                 if (foundLandmark == false && element.TextContent.Trim() == landmark)
                 {
+                    if (--landmarkIndex > 0)           // Find the nth instance of the landmark...
+                    {
+                        // Skip past immediately subsequent subsequent elements with the same text (ie nested tags) before continuing the search
+                        for (++iElement;  iElement < tableSelector.Length && tableSelector[++iElement].TextContent.Trim() == landmark; ++iElement)
+                            ;
+                        continue;
+                    }
+
                     Console.WriteLine("Landmark found in tag " + element.TagName);
+
                     foundLandmark = true;
 
                     // If landmark is in a table, then that table is what we want.  Otherwise the next table is the one we want.
@@ -73,7 +98,7 @@ namespace AngleSharpTest1
                 return;
             }
 
-            // Parse HTML table into matrix (2d row-oriented list of lists)
+            // Parse HTML table just found into a 2d matrix (actually a list of TableRow objects, which contain a list of TableCell objects)
             var tableData = new List<TableRow>();
             var rowElements = foundTable.QuerySelectorAll("TR");
             foreach (var rowElement in rowElements)
@@ -105,7 +130,7 @@ namespace AngleSharpTest1
             }
 
             // Save a csv of the Matrix for analysis
-            writeTableToFile(outputPath, tableData);
+//            writeTableToFile(outputPath, tableData);
 
             // Extract Headings
             IList<string> columnHeadings = ExtractColumnHeadings(tableData);
@@ -116,11 +141,11 @@ namespace AngleSharpTest1
 
             CalcRowheadIndentationLevels(tableData);        // Calculate the relative indentation level of each rowhead vs the rest.
 
-            BuildComplexRowHeads(tableData);
+            BuildComplexRowHeads(tableData, config);
 
 
             // Flatten matrix with some rules
-            List<FlattenedRow> results = new List<FlattenedRow>();
+            List <FlattenedRow> results = new List<FlattenedRow>();
             string attributeName = "";
 
             for (int iRow = 0; iRow < tableData.Count; ++iRow) {
@@ -138,36 +163,6 @@ namespace AngleSharpTest1
                 }
 
                 if (attributeName.Length == 0) continue;    // Assumption: rows without attribute names should be skipped.
-
-                // Special handling for rows labeled Basic or Diluted: find their overarching heading.
-                //   Assumption:  Rows labeled only "Basic" and "Diluted" are futher identified by the heading immediately above them that's not "Basic" or "Diluted".
-                //if (attributeName == "Basic" || attributeName == "Diluted")
-                //{
-                    
-                //    int iSuperHead = iRow - 1;
-                //    if (tableData[iSuperHead].Cells[0].Text == "Basic" || tableData[iSuperHead].Cells[0].Text == "Diluted")
-                //    {
-                //        --iSuperHead;
-                //    }
-                //    if (iSuperHead > 0)
-                //    {
-                //        attributeName = tableData[iSuperHead].Cells[0].Text + " - " + attributeName;
-                //    }
-                //}
-
-                //// Special handling for rows labeled "Total": find their overarching heading.
-                ////  Assumption: a blank row will demarcate the sub-section of the table that this total is for.
-                //if (attributeName == "Total")
-                //{
-                //    int iSuperHead = 0;
-                //    for (iSuperHead = iRow; iSuperHead > 0 && tableData[iSuperHead].Cells[0].Text.Length > 0; --iSuperHead)
-                //        ;
-                //    if (tableData[iSuperHead].Cells[0].Text.Length == 0)
-                //    {
-                //        ++iSuperHead;
-                //    }
-                //    attributeName = attributeName + ": " + tableData[iSuperHead].Cells[0].Text;
-                //}
 
                 // Standardize attribute: only single spaces between words
                 attributeName = ConsolidateWhitespace(attributeName);
@@ -215,6 +210,14 @@ namespace AngleSharpTest1
             }
         }
 
+        public static bool GetConfigBool(string key, IDictionary<string, string>configDict)
+        {
+            if (configDict == null) return false;
+            if (!configDict.ContainsKey(key)) return false;
+            if (configDict[key].ToLower() == "true") return true;
+            return false;
+        }
+
         public static void CalcRowheadIndentationLevels(List<TableRow> tableData)
         {
             // Find rowHead distinct indentation levels
@@ -236,11 +239,76 @@ namespace AngleSharpTest1
             }
         }
 
-        public static void BuildComplexRowHeads(List<TableRow> tableData)
+        public static void BuildComplexRowHeads(List<TableRow> tableData, IDictionary<string, string> config)
         {
             for (int iRow = 0; iRow < tableData.Count; ++iRow)
             {
                 var row = tableData[iRow];
+
+                // If this rowhead is one of a handful of values then it is a stand-alone heading (has no parent, even if indented)
+                // MOVE THIS TO CONFIG, PROBABLY ON A PER COMPANY/FORM BASIS
+                string[] standAloneRowheads = {
+                    "Gross margin",      // Apple
+                    "Total net sales", "Total non-operating income (expense)"    // Amazon
+                };
+                bool foundMatch = false;
+                foreach (var standAloneRowhead in standAloneRowheads)
+                {
+                    if (row.RowHead.Text.ToLower() == standAloneRowhead.ToLower())
+                    {
+                        row.parentRow = null;
+                        foundMatch = true;
+                        break;
+                    }
+                }
+                if (foundMatch == true)
+                {
+                    continue;
+                }
+
+                // If configured to associate undifferentiated "Total" headings with the preceding bold heading (ie Deere Income)
+                foundMatch = false;
+                if (row.RowHead.Text == "Total" && GetConfigBool("UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", config))
+                {
+                    for (int iRow2 = iRow - 1; iRow2 >= 0 && tableData[iRow2].RowHead.Text.Length > 0; --iRow2)
+                    {
+                        var precedingRow = tableData[iRow2];
+                        if (precedingRow.RowHead.Bold)
+                        {
+                            row.parentRow = precedingRow;
+                            foundMatch = true;
+                            break;
+                        }
+                    }                  
+                    if (foundMatch)
+                    {
+                        continue;
+                    }
+                }
+
+                // If this rowhead is of the form "Total XXXX" and XXX is a preceeding rowhead then this is a stand-alone heading (has no parent, even if indented).
+                string s = row.RowHead.Text.ToLower();
+                Match m = Regex.Match(s, @"total (.*)");
+                foundMatch = false;
+                if (m.Success)
+                {
+                    string lookFor = m.Groups[1].Captures[0].Value;
+                    for (int iRow2 = iRow-1; iRow2 >= 0 && tableData[iRow2].RowHead.Text.Length > 0; --iRow2)
+                    {
+                        var precedingRow = tableData[iRow2];
+                        if (precedingRow.RowHead.Text.ToLower() == lookFor)
+                        {
+                            row.parentRow = null;
+                            foundMatch = true;
+                            break;
+                        }
+                    }
+                }
+                if (foundMatch == true)
+                {
+                    continue;
+                }
+
 
                 // If this rowhead is indented make the first preceeding row at a less indentation level its parent.
                 if (row.RowHead.IndentationLevel > 0)
@@ -354,17 +422,16 @@ namespace AngleSharpTest1
                     // Look for more detail about what these points in time mean elsewhere in the table.  See Deere 10Q.
                     foreach (var row2 in tableData)
                     {
-                        TableCell cell = row2.Cells[0];
-                        string cellTextLower = cell.Text.ToLower();
+                        string rowHeadTextLower = row2.RowHead.Text.ToLower();
 
                         // Assumption for now: these explanations are in column 0
-                        Match mMonths = Regex.Match(cellTextLower, @"(\w*) months ended");
+                        Match mMonths = Regex.Match(rowHeadTextLower, @"(\w*) months ended");
                         if (mMonths.Success)
                         {
                             string numMonths = mMonths.Groups[1].Captures[0].Value;
                             numMonths = numMonths.Substring(0, 1).ToUpper() + numMonths.Substring(1);
 
-                            Match mDate = Regex.Match(cellTextLower, @"(\w+) (\d+)?, " + heading);
+                            Match mDate = Regex.Match(rowHeadTextLower, @"(\w+) (\d+)?, " + heading);
                             if (mDate.Success)
                             {
                                 string month = mDate.Groups[1].Captures[0].Value;
@@ -617,7 +684,5 @@ namespace AngleSharpTest1
         {
             return new { attribute, time, value }.GetHashCode();
         }
-
     }
-
 }
