@@ -6,101 +6,157 @@ using System.Text;
 using System.Threading.Tasks;
 using AngleSharp;
 using System.Text.RegularExpressions;
+using System.Diagnostics;
+using Newtonsoft.Json.Linq;
+using Newtonsoft.Json;
 
 namespace AngleSharpTest1
 {
     class Program
     {
-        static void Main(string[] args)
+        static void ExtractFromFiling(string sourceFileName, string ticker, string filingType)
         {
-            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", 1, @"c:\temp\deere_consolidated_income_3mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
-            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED COMPREHENSIVE INCOME", 1, @"c:\temp\deere_consolidated_comprehensive_income_3mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
-            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", 2, @"c:\temp\deere_consolidated_income_6mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
-            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED COMPREHENSIVE INCOME", 2, @"c:\temp\deere_consolidated_comprehensive_income_6mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
-            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "CONDENSED CONSOLIDATED BALANCE SHEET", 1, @"c:\temp\deere_balance", null);
-            ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED CASH FLOWS", 1, @"c:\temp\deere_cashflow_6mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
+            string extractionsJson = File.ReadAllText(@"config\extractions.json");
+            JObject config = JObject.Parse(extractionsJson);
 
-            ExtractTableFromHTML(@"c:\temp\cat_10qx6302017.htm", "Consolidated Statement of Results of Operations", 1, @"c:\temp\cat", null);
-            ExtractTableFromHTML(@"c:\temp\a17-13367_110q.htm", "CONSOLIDATED STATEMENT OF EARNINGS", 1, @"c:\temp\ibm", null);
-            ExtractTableFromHTML(@"c:\temp\a10-qq32017712017.htm", "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (Unaudited)", 1, @"c:\temp\apple", null);
-            ExtractTableFromHTML(@"c:\temp\mdt-2015q3x10q.htm", "CONDENSED CONSOLIDATED STATEMENTS OF EARNINGS", 1, @"c:\temp\medtronic", null);
-            ExtractTableFromHTML(@"c:\temp\amzn-20170630x10q.htm", "CONSOLIDATED STATEMENTS OF OPERATIONS", 1, @"c:\temp\amazon", null);
+            var companyConfig = config[ticker];
+            if (companyConfig == null)
+            {
+                Console.WriteLine("No config found for ticker " + ticker);
+                return;
+            }
 
-            Console.Write("Done. Press enter to exit");
-            Console.ReadLine();
+            var filingConfig = companyConfig["Filings"][filingType];
+            if (filingConfig == null)
+            {
+                Console.WriteLine("No filing config found for filing " + filingType + " under ticker " + ticker);
+                return;
+            }
+
+            string sourceFilesBaseDirectory = @"C:\temp\Wikipedia_SP500_10Q_Downloader_Output\";
+            string sourceFileFullyQualified = sourceFilesBaseDirectory + sourceFileName;
+            AngleSharp.Dom.Html.IHtmlDocument htmlDoc = null;
+            try
+            {
+                htmlDoc = ReadAndParseHtmlFile(sourceFileFullyQualified);
+            }
+            catch(Exception e)
+            {
+                Console.WriteLine("Exception reading " + sourceFileFullyQualified + ":");
+                Console.WriteLine(e);
+                return;
+            }
+
+            string outputFilesBaseDirectory = @"c:\temp\10QParserOutput\";
+            foreach (JObject statement in filingConfig.Value<JArray>())
+            {
+                foreach (JProperty prop in statement.Properties())
+                {
+                    string statementTitle =  prop.Value["StatementTitle"].ToString();
+
+                    int statementOccurrenceIndex = (int)prop.Value["StatementOccurrence"];
+
+                    string outputFile = outputFilesBaseDirectory + ticker + "_" + statementTitle + "_" + statementOccurrenceIndex + ".txt";
+
+                    var jLandmarks = ((JArray)prop.Value["Landmarks"]).ToArray<JToken>();
+                    List<string> arLandmarks = new List<string>();
+                    foreach (var jLandmark in jLandmarks)
+                    {
+                        arLandmarks.Add(((JValue)jLandmark).ToString());
+                    }
+
+                    IDictionary<string, string> rowHeadOverrideDict = new Dictionary<string, string>();
+                    IDictionary<string, string> parameterDict = new Dictionary<string, string>();
+
+                    var jOptions = ((JObject)prop.Value["Options"]);
+                    if (jOptions != null)
+                    {
+                        var jRowHeadOverrides = (JArray)(jOptions["RowHeadOverrides"]);
+                        if (jRowHeadOverrides != null)
+                        {
+                            foreach (var jRowHeadOverride in jRowHeadOverrides.Children<JObject>())
+                            {
+                                var k = jRowHeadOverride.Properties().First<JProperty>().Name;
+                                var v = jRowHeadOverride.Properties().First<JProperty>().Value;
+                                rowHeadOverrideDict.Add(k, v.ToString());
+                            }
+                        }
+
+                        var jParameters = (JArray)(jOptions["Parameters"]);
+                        if (jParameters != null)
+                        {
+                            foreach (var jParameter in jParameters.Children<JObject>())
+                            {
+                                var k = jParameter.Properties().First<JProperty>().Name;
+                                var v = jParameter.Properties().First<JProperty>().Value;
+                                parameterDict.Add(k, v.ToString());
+                            }
+                        }
+                    }
+
+                    ExtractTableFromHTML(htmlDoc, arLandmarks.ToArray(), statementTitle, statementOccurrenceIndex, outputFile, rowHeadOverrideDict, parameterDict);
+                }
+            }
+
+
+
+
         }
 
 
-        public static void ExtractTableFromHTML(string sourcePath, string landmark, int landmarkIndex, string outputPath, IDictionary<string, string> config)
+        static void Main(string[] args)
         {
-            // Set up angleSharp html parser
-            var angleSharConfig = Configuration.Default.WithCss();
-            var parser = new AngleSharp.Parser.Html.HtmlParser(angleSharConfig);
+            ExtractFromFiling("MMM_mmm-20170630x10q.htm", "MMM","10-Q");
 
-            // Read the source html file
-            FileStream fs = File.OpenRead(sourcePath);
+            //ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", 1, @"c:\temp\deere_consolidated_income_3mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
+            //ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED COMPREHENSIVE INCOME", 1, @"c:\temp\deere_consolidated_comprehensive_income_3mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
+            //ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", 2, @"c:\temp\deere_consolidated_income_6mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
+            //ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED COMPREHENSIVE INCOME", 2, @"c:\temp\deere_consolidated_comprehensive_income_6mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
+            //ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "CONDENSED CONSOLIDATED BALANCE SHEET", 1, @"c:\temp\deere_balance", null);
+            //ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED CASH FLOWS", 1, @"c:\temp\deere_cashflow_6mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
 
-            // Parse it into a DOM with AngleSharp
-            var doc = parser.Parse(fs);
+            //ExtractTableFromHTML(@"c:\temp\cat_10qx6302017.htm", "Consolidated Statement of Results of Operations", 1, @"c:\temp\cat", null);
+            //ExtractTableFromHTML(@"c:\temp\a17-13367_110q.htm", "CONSOLIDATED STATEMENT OF EARNINGS", 1, @"c:\temp\ibm", null);
+            //ExtractTableFromHTML(@"c:\temp\a10-qq32017712017.htm", "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (Unaudited)", 1, @"c:\temp\apple", null);
+            //ExtractTableFromHTML(@"c:\temp\mdt-2015q3x10q.htm", "CONDENSED CONSOLIDATED STATEMENTS OF EARNINGS", 1, @"c:\temp\medtronic", null);
+            //ExtractTableFromHTML(@"c:\temp\amzn-20170630x10q.htm", "CONSOLIDATED STATEMENTS OF OPERATIONS", 1, @"c:\temp\amazon", null);
 
+            //Console.Write("Done. Press enter to exit");
+            //Console.ReadLine();
+        }
+
+        public static void ExtractTableFromHTML(AngleSharp.Dom.Html.IHtmlDocument doc, string[] landmarks, string statementTitle, int statementInstanceIndex, string outputPath, IDictionary<string, string> rowHeadOverrides, IDictionary<string, string> config)
+        {
             // Select all the DOM's elements
             var tableSelector = doc.QuerySelectorAll("*");
 
-            // Look for the specified occurence (landmarkIndex), and find the table related to it.  
-            //  The related table is either the table containing the landmark (if the landmark is contained in a table) 
-            //  or the table immeiately following the landmark (if the landmark isn't contained in a table)
-            //  The below is a bit of a state machine, with the bool foundLandmark and in landmarkIndex controlling how it behaves
-            //  as it scans the elements sequentially.
+            // Find the sequential set of landmarks that skip past any undesired occurrences of the statement title before the statement itself (ie in the TOC)
+            int lastLandmarkIndex = findLandmarks(tableSelector, 0, landmarks);
 
-            bool foundLandmark = false;
-            AngleSharp.Dom.IElement foundTable = null;
-            for (int iElement = 0; iElement < tableSelector.Length; ++iElement)
+            // Skip past the last landmark found
+            lastLandmarkIndex = skipPastLandmark(tableSelector, lastLandmarkIndex, landmarks[landmarks.Length - 1]);
+
+            // Find the actual statement title landmark
+            lastLandmarkIndex = findLandmark(tableSelector, lastLandmarkIndex, statementTitle);                         
+
+            // See if that landmark is contained by a table (assumed, then, to be the statement table)
+            int statementTableIndex = findContainingElementByType(tableSelector, lastLandmarkIndex, "table");
+            if (statementTableIndex == -1)
             {
-                var element = tableSelector[iElement];
-
-                if (foundLandmark == false && element.TextContent.Trim() == landmark)
-                {
-                    if (--landmarkIndex > 0)           // Find the nth instance of the landmark...
-                    {
-                        // Skip past immediately subsequent subsequent elements with the same text (ie nested tags) before continuing the search
-                        for (++iElement;  iElement < tableSelector.Length && tableSelector[++iElement].TextContent.Trim() == landmark; ++iElement)
-                            ;
-                        continue;
-                    }
-
-                    Console.WriteLine("Landmark found in tag " + element.TagName);
-
-                    foundLandmark = true;
-
-                    // If landmark is in a table, then that table is what we want.  Otherwise the next table is the one we want.
-                    var element2 = element;
-                    while (element2 != null && element2.TagName != "TABLE")
-                    {
-                        element2 = element2.ParentElement;
-                    }
-                    if (element2 != null && element2.TagName == "TABLE")
-                    {
-                        Console.WriteLine("Table found, containing landmark");
-                        foundTable = element2;
-                        break;
-                    }
-                }
-                if (foundLandmark == true && element.TagName == "TABLE")
-                {
-                    Console.WriteLine("Table found below landmark.");
-                    foundTable = element;
-                    break;
-                }
+                // Landmark is not contained in a table, so statement table is assumed to be first table following the landmark.
+                statementTableIndex = findFollowingElementByType(tableSelector, lastLandmarkIndex, "table");
             }
-            if (foundTable == null)
+            if (statementTableIndex == -1)
             {
                 Console.WriteLine("No landmarked table found");
                 return;
             }
+            var statementTable = tableSelector[statementTableIndex];
 
-            // Parse HTML table just found into a 2d matrix (actually a list of TableRow objects, which contain a list of TableCell objects)
+
+            // Parse statement table just found into a 2d matrix (actually a list of TableRow objects, which contain a list of TableCell objects)
             var tableData = new List<TableRow>();
-            var rowElements = foundTable.QuerySelectorAll("TR");
+            var rowElements = statementTable.QuerySelectorAll("TR");
             foreach (var rowElement in rowElements)
             {
                 var rowData = new TableRow();
@@ -129,44 +185,42 @@ namespace AngleSharpTest1
                 tableData.Add(rowData);
             }
 
-            // Save a csv of the Matrix for analysis
-//            writeTableToFile(outputPath, tableData);
+            // For diagnostic purposes save a csv of the parsed table 
+//            writeTableToFile(outputPath + ".tbl", tableData);
 
-            // Extract Headings
+            // Extract the column Headings from the table into list
             IList<string> columnHeadings = ExtractColumnHeadings(tableData);
             if (columnHeadings == null)
             {
                 Console.WriteLine("FATAL: Cannot find any qualifying heading rows in table");
             }
 
-            CalcRowheadIndentationLevels(tableData);        // Calculate the relative indentation level of each rowhead vs the rest.
+            // Post-process the rowheads in the table, calculating its relative indentation level (compared to the rest of the rowheads)
+            CalcRowheadIndentationLevels(tableData);
 
-            BuildComplexRowHeads(tableData, config);
+            // Post-process the rowheads, linking each to any parents it has, based on rules and clues.
+            BuildComplexRowHeads(tableData, rowHeadOverrides, config);
 
-
-            // Flatten matrix with some rules
+            // Flatten matrix to a list of tuples using some rules
             List <FlattenedRow> results = new List<FlattenedRow>();
             string attributeName = "";
 
             for (int iRow = 0; iRow < tableData.Count; ++iRow) {
                 var row = tableData[iRow];
-
                 int nCols = row.Cells.Count;
 
+                // Create the attribute name for this row from its row head and those of its parents
                 attributeName = row.RowHead.Text;
-
                 TableRow row2 = row.parentRow;
                 while (row2 != null && row2.RowHead.Text.Length > 0)
                 {
                     attributeName = row2.RowHead.Text + "|" + attributeName;
                     row2 = row2.parentRow;
                 }
-
                 if (attributeName.Length == 0) continue;    // Assumption: rows without attribute names should be skipped.
 
-                // Standardize attribute: only single spaces between words
+                // Standardize attribute name format: only single spaces between words
                 attributeName = ConsolidateWhitespace(attributeName);
-
 
                 // Scan columns
                 string colContent = "";
@@ -181,33 +235,123 @@ namespace AngleSharpTest1
                         continue;
                     }
 
-                    // Fix up chars in col content
-                    colContent = colContent.Replace('(', '-').Replace(")", "").Replace(",", "");     // Parens = -, drop commas.
+                    // Convert (xxx) to -xxx.  Drop comma separators
+                    colContent = colContent.Replace('(', '-').Replace(")", "").Replace(",", "");
 
-                    // Get the heading for this col.  ASSUMTPION: Column headings are first contiguous cells with centered text.
+                    // Get the heading for this col
                     string heading = columnHeadings[iCol];
 
+                    // Create the tuple with this data and add it to the results list.
                     FlattenedRow flatRow = new FlattenedRow(attributeName, heading, colContent);
                     results.Add(flatRow);
-
                 }
-
             }
 
-            // The spans result in duplicated entries.  Get rid of them.
-            //  I'm using this strategy because the numeric value may or may not appear in some or all of the spanned cols.
-            //  Easier to output all that it appears in, and then eliminate the dupes.
-        
+            // HTML column spans can result in duplicated entries: get rid of them.
             var distinctFlatRows = results.Distinct();
 
-            // Write the flattened matrix out
-            using (StreamWriter fsw = File.CreateText(outputPath + ".csv"))
+            // Write the flattened matrix out to file
+            using (StreamWriter fsw = File.CreateText(outputPath))
             {
                 foreach (var record in distinctFlatRows)
                 {
                     fsw.Write(record + "\r\n");
                 }
             }
+        }
+
+        public static AngleSharp.Dom.Html.IHtmlDocument ReadAndParseHtmlFile(string path)
+        {
+            // Set up angleSharp html parser
+            var angleSharConfig = Configuration.Default.WithCss();
+            var parser = new AngleSharp.Parser.Html.HtmlParser(angleSharConfig);
+
+            // Read the source html file
+            FileStream fs = File.OpenRead(path);
+
+            // Parse it into a DOM with AngleSharp
+            var doc = parser.Parse(fs);
+
+            return doc;
+        }
+
+
+        public static int findLandmark(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elementsToScan, int startingIndex, string landmark)
+        {
+            for (int iElement = startingIndex; iElement < elementsToScan.Length; ++iElement)
+            {
+                var element = elementsToScan[iElement];
+                if (element.TextContent.Trim() == landmark)
+                {
+                    return iElement;
+                }
+            }
+            return -1;  // Not found
+        }
+
+        public static int findLandmarks(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elementsToScan, int startingIndex, string[] landmarks)
+        {
+            if (landmarks == null || landmarks.Length == 0) return startingIndex;
+
+            for (int iLandmark = 0; iLandmark < landmarks.Length; ++iLandmark)
+            {
+                string landmark = landmarks[iLandmark];
+                startingIndex = findLandmark(elementsToScan, startingIndex, landmark);
+                if (startingIndex == -1)
+                {
+                    return -1;      // Could not find one of the landmarks
+                }
+                else if (iLandmark != landmarks.Length - 1) // Don't skip past the last landmark found
+                {
+                    startingIndex = skipPastLandmark(elementsToScan, startingIndex, landmark);
+                }
+            }
+            return startingIndex;
+        }
+
+        public static int findFollowingElementByType(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elementsToScan, int startingIndex, string elementType)
+        {
+            for (int iElement = startingIndex; iElement < elementsToScan.Length; ++iElement)
+            {
+                var element = elementsToScan[iElement];
+                if (element.TagName.ToLower() == elementType.ToLower())
+                {
+                    return iElement;
+                }
+            }
+            return -1;  // Not found
+        }
+
+        public static int findContainingElementByType(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elementsToScan, int startingIndex, string elementType)
+        {
+            var element = elementsToScan[startingIndex];
+
+            while (element != null && element.TagName.ToLower() != elementType.ToLower())
+            {
+                element = element.ParentElement;
+            }
+            if (element != null && element.TagName.ToLower() == elementType.ToLower())
+            {
+                for (int iElement = 0; iElement < elementsToScan.Length; ++iElement)
+                {
+                    // Converting back to index numbers is fugly.  
+                    if (elementsToScan[iElement] == element)
+                    {
+                        return iElement;
+                    }
+                }
+                Debug.Assert(false, "findContainingElementByType could not find element known to be in elementsToScan");
+                return -1;  // Won't happen.
+            }
+            return -1;      // No containing element of this type found.
+        }
+
+        public static int skipPastLandmark(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elementsToScan, int startingIndex, string landmark)
+        {
+            int iElement;
+            for (iElement = startingIndex; iElement < elementsToScan.Length && elementsToScan[iElement].TextContent.Trim() == landmark; ++iElement)
+                ;
+            return iElement;
         }
 
         public static bool GetConfigBool(string key, IDictionary<string, string>configDict)
@@ -239,35 +383,22 @@ namespace AngleSharpTest1
             }
         }
 
-        public static void BuildComplexRowHeads(List<TableRow> tableData, IDictionary<string, string> config)
+        public static void BuildComplexRowHeads(List<TableRow> tableData, IDictionary<string, string> rowHeadOverrides, IDictionary<string, string> config)
         {
             for (int iRow = 0; iRow < tableData.Count; ++iRow)
             {
                 var row = tableData[iRow];
 
-                // If this rowhead is one of a handful of values then it is a stand-alone heading (has no parent, even if indented)
-                // MOVE THIS TO CONFIG, PROBABLY ON A PER COMPANY/FORM BASIS
-                string[] standAloneRowheads = {
-                    "Gross margin",      // Apple
-                    "Total net sales", "Total non-operating income (expense)"    // Amazon
-                };
-                bool foundMatch = false;
-                foreach (var standAloneRowhead in standAloneRowheads)
+                // If this rowhead is overridden through config replace it as specified. It stands alone (though the substitution rowhead may|be|complex.
+                if (rowHeadOverrides.ContainsKey(row.RowHead.Text))
                 {
-                    if (row.RowHead.Text.ToLower() == standAloneRowhead.ToLower())
-                    {
-                        row.parentRow = null;
-                        foundMatch = true;
-                        break;
-                    }
-                }
-                if (foundMatch == true)
-                {
+                    row.RowHead.Text = rowHeadOverrides[row.RowHead.Text];
+                    row.parentRow = null;
                     continue;
                 }
 
-                // If configured to associate undifferentiated "Total" headings with the preceding bold heading (ie Deere Income)
-                foundMatch = false;
+                // If configured to, associate undifferentiated "Total" headings with the preceding bold heading (ie Deere Income)
+                bool foundMatch = false;
                 if (row.RowHead.Text == "Total" && GetConfigBool("UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", config))
                 {
                     for (int iRow2 = iRow - 1; iRow2 >= 0 && tableData[iRow2].RowHead.Text.Length > 0; --iRow2)
@@ -286,27 +417,27 @@ namespace AngleSharpTest1
                     }
                 }
 
-                // If this rowhead is of the form "Total XXXX" and XXX is a preceeding rowhead then this is a stand-alone heading (has no parent, even if indented).
+                // If this rowhead is of the form "Total XXXX" and XXX is a preceeding rowhead then that preceding rowhead is its parent (regardless of indentation)
                 string s = row.RowHead.Text.ToLower();
                 Match m = Regex.Match(s, @"total (.*)");
-                foundMatch = false;
                 if (m.Success)
                 {
-                    string lookFor = m.Groups[1].Captures[0].Value;
-                    for (int iRow2 = iRow-1; iRow2 >= 0 && tableData[iRow2].RowHead.Text.Length > 0; --iRow2)
+                    foundMatch = false;
+                    string lookFor = m.Groups[1].Captures[0].Value.ToLower();
+                    for (int iRow2 = iRow-1; iRow2 >= 0 /* && tableData[iRow2].RowHead.Text.Length > 0 */; --iRow2)
                     {
                         var precedingRow = tableData[iRow2];
                         if (precedingRow.RowHead.Text.ToLower() == lookFor)
                         {
-                            row.parentRow = null;
+                            row.parentRow = tableData[iRow2];
                             foundMatch = true;
                             break;
                         }
                     }
-                }
-                if (foundMatch == true)
-                {
-                    continue;
+                    if (foundMatch == true)
+                    {
+                        continue;
+                    }
                 }
 
 
@@ -335,7 +466,7 @@ namespace AngleSharpTest1
                     }
                 }
                 // If not indented, not bold and has content make previous bold row without content its parent.
-                else if (!row.RowHead.Bold && row.bRowCellsHaveContent)
+                else if (!row.RowHead.Bold /* && row.bRowCellsHaveContent */)
                 {
                     for (int iRowInner = iRow - 1; iRowInner >= 0; --iRowInner)
                     {
@@ -587,6 +718,10 @@ namespace AngleSharpTest1
                 Double.TryParse(element.Style.TextIndent.Replace("px", "").Replace("pt", ""), out textIndent);
                 this.Indentation += textIndent;
             }
+
+            // Eliminate "meaningless" indentation diffs.  MAKE THE SENSITIVITY OF THIS OVERRIDEABLE THROUGH CONFIG PARAMS.
+            const int INDENTATION_GRANULARITY = 2;
+            this.Indentation = (double)((((int)this.Indentation) / INDENTATION_GRANULARITY) * INDENTATION_GRANULARITY);
 
             // Iterate over this element's children, recursing down the branches of each.
             //  Recursion bounded by leaf elements having no children.

@@ -1,0 +1,50 @@
+﻿{
+  "MMM": {
+    "Security": "3M Company",
+    "CIK": "66740",
+    "Filings": {
+      "10-Q": [
+        {
+          "Consolidated Balance Sheet": {
+            "StatementTitle": "Consolidated Balance Sheet",
+            "StatementOccurrence": 1,
+            "Landmarks": [ "Consolidated Balance Sheet" ],
+            "Options": {
+              "RowHeadOverrides": [
+                { "Property, plant and equipment — net": "Assets|Property, plant and equipment|Net" },
+                { "Total liabilities and equity": "Total liabilities and equity" }
+              ]
+            }
+          }
+        },
+        {
+          "Consolidated Statement of Income": {
+            "StatementTitle": "Consolidated Statement of Income",
+            "StatementOccurrence": 1,
+            "Landmarks": [ "Consolidated Statement of Income" ],
+            "Options": {
+              "RowHeadOverrides": [
+                { "Total interest expense — net": "Interest expense and income|Total interest expense — net" }
+              ]
+            }
+          }
+        },
+        {
+          "Consolidated Statement of Comprehensive Income": {
+            "StatementTitle": "Consolidated Statement of Comprehensive Income",
+            "StatementOccurrence": 1,
+            "Landmarks": [ "Consolidated Statement of Comprehensive Income" ]
+          }
+        },
+        {
+
+          "Consolidated Statement of Cash Flows": {
+            "StatementTitle": "Consolidated Statement of Cash Flows",
+            "StatementOccurrence": 1,
+            "Landmarks": [ "Consolidated Statement of Cash Flows" ]
+          }
+        }
+      ]
+    }
+  }
+}
