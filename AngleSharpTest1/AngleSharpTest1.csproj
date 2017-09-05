@@ -53,7 +53,11 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
-    <None Include="Config\Extractions.json">
+    <None Include="Config\3M COMPANY.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Include="Config\ExampleCompany.json" />
+    <None Include="Config\INTERNATIONAL BUSINESS MACHINES CORPORATION.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
     <None Include="packages.config" />

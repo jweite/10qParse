@@ -14,127 +14,157 @@ namespace AngleSharpTest1
 {
     class Program
     {
-        static void ExtractFromFiling(string sourceFileName, string ticker, string filingType)
+        static void Main(string[] args)
         {
-            string extractionsJson = File.ReadAllText(@"config\extractions.json");
-            JObject config = JObject.Parse(extractionsJson);
+            ExtractFromFiling(args[0]);
+            Console.Write("Done. Press enter to exit");
+            Console.ReadLine();
+        }
 
-            var companyConfig = config[ticker];
-            if (companyConfig == null)
-            {
-                Console.WriteLine("No config found for ticker " + ticker);
-                return;
-            }
+        static void ExtractFromFiling(string sourceFilePath)
+        {
+            Console.WriteLine("Extracting from " + sourceFilePath);
 
-            var filingConfig = companyConfig["Filings"][filingType];
-            if (filingConfig == null)
-            {
-                Console.WriteLine("No filing config found for filing " + filingType + " under ticker " + ticker);
-                return;
-            }
-
-            string sourceFilesBaseDirectory = @"C:\temp\Wikipedia_SP500_10Q_Downloader_Output\";
-            string sourceFileFullyQualified = sourceFilesBaseDirectory + sourceFileName;
+            // Read and parse the filing html file
             AngleSharp.Dom.Html.IHtmlDocument htmlDoc = null;
             try
             {
-                htmlDoc = ReadAndParseHtmlFile(sourceFileFullyQualified);
+                htmlDoc = ReadAndParseHtmlFile(sourceFilePath);
             }
-            catch(Exception e)
+            catch (Exception e)
             {
-                Console.WriteLine("Exception reading " + sourceFileFullyQualified + ":");
+                Console.WriteLine("Exception reading " + sourceFilePath + ":");
+                Console.WriteLine(e);
+                return;
+            }
+            if (htmlDoc == null)
+            {
+                Console.WriteLine("No data parsing " + sourceFilePath + ":");
+                return;
+            }
+
+            // Extract the Registered Company Name from the filing.
+            string registeredCompanyName = ExtractRegisteredCompanyName(htmlDoc);
+
+            // Extract the filing type from the filing.
+            string formType = ExtractFormType(htmlDoc);
+
+            Console.WriteLine("Extracting Tables from Form " + formType + " for " + registeredCompanyName);
+
+            // Read the config file for this company
+            string companyConfigurationFileName = @"config\" + registeredCompanyName + ".json";
+            string companyConfigJson;
+            try
+            {
+                companyConfigJson = File.ReadAllText(companyConfigurationFileName);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("Exception on read of company configuration file " + companyConfigurationFileName);
                 Console.WriteLine(e);
                 return;
             }
 
-            string outputFilesBaseDirectory = @"c:\temp\10QParserOutput\";
-            foreach (JObject statement in filingConfig.Value<JArray>())
+            // Parse the company configuration JSON file and extract the salient details
+            JObject config = JObject.Parse(companyConfigJson);
+            var registeredName = getStringValueFromJObject(config, "RegisteredName");
+            var ticker = getStringValueFromJObject(config, "Ticker");
+            var cik = getStringValueFromJObject(config, "CIK");
+            JObject jFilings = (JObject)config["Filings"];
+            JObject tenQfiling = (JObject)jFilings["10-Q"];
+            JArray filingTables = (JArray)tenQfiling["Tables"];
+            foreach (var filingTable in filingTables.Values<JObject>())
             {
-                foreach (JProperty prop in statement.Properties())
+                string statementTitle = getStringValueFromJObject(filingTable, "StatementTitle");
+                int titleOccurrence = (filingTable["TitleOccurence"] != null) ? ((JProperty)filingTable["TitleOccurence"]).Value<int>() : 1;
+                JArray jLandmarks = (JArray)filingTable["AdditionalLandmarks"];
+                List<string> additionalLandmarks = new List<string>();
+                if (jLandmarks != null)
                 {
-                    string statementTitle =  prop.Value["StatementTitle"].ToString();
-
-                    int statementOccurrenceIndex = (int)prop.Value["StatementOccurrence"];
-
-                    string outputFile = outputFilesBaseDirectory + ticker + "_" + statementTitle + "_" + statementOccurrenceIndex + ".txt";
-
-                    var jLandmarks = ((JArray)prop.Value["Landmarks"]).ToArray<JToken>();
-                    List<string> arLandmarks = new List<string>();
                     foreach (var jLandmark in jLandmarks)
                     {
-                        arLandmarks.Add(((JValue)jLandmark).ToString());
+                        additionalLandmarks.Add(((JValue)jLandmark).ToString());
                     }
+                }
 
-                    IDictionary<string, string> rowHeadOverrideDict = new Dictionary<string, string>();
-                    IDictionary<string, string> parameterDict = new Dictionary<string, string>();
+                IDictionary<string, string> rowHeadOverrideDict = new Dictionary<string, string>();
+                IDictionary<string, string> parametersDict = new Dictionary<string, string>();
 
-                    var jOptions = ((JObject)prop.Value["Options"]);
-                    if (jOptions != null)
+                JObject jOptions = (JObject)filingTable["Options"];
+                if (jOptions != null)
+                {
+                    JArray jRowHeadOverides = (JArray)jOptions["RowHeadOverrides"];
+                    foreach (var jRowHeadOverride in jRowHeadOverides.Children<JObject>())
                     {
-                        var jRowHeadOverrides = (JArray)(jOptions["RowHeadOverrides"]);
-                        if (jRowHeadOverrides != null)
-                        {
-                            foreach (var jRowHeadOverride in jRowHeadOverrides.Children<JObject>())
-                            {
-                                var k = jRowHeadOverride.Properties().First<JProperty>().Name;
-                                var v = jRowHeadOverride.Properties().First<JProperty>().Value;
-                                rowHeadOverrideDict.Add(k, v.ToString());
-                            }
-                        }
-
-                        var jParameters = (JArray)(jOptions["Parameters"]);
-                        if (jParameters != null)
-                        {
-                            foreach (var jParameter in jParameters.Children<JObject>())
-                            {
-                                var k = jParameter.Properties().First<JProperty>().Name;
-                                var v = jParameter.Properties().First<JProperty>().Value;
-                                parameterDict.Add(k, v.ToString());
-                            }
-                        }
+                        var k = jRowHeadOverride.Properties().First<JProperty>().Name;
+                        var v = jRowHeadOverride.Properties().First<JProperty>().Value;
+                        rowHeadOverrideDict.Add(k, v.ToString());
                     }
+                    JArray jParameters = (JArray)jOptions["Parameters"];
+                    foreach (var jParameter in jParameters.Children<JObject>())
+                    {
+                        var k = jParameter.Properties().First<JProperty>().Name;
+                        var v = jParameter.Properties().First<JProperty>().Value;
+                        parametersDict.Add(k, v.ToString());
+                    }
+                }
 
-                    ExtractTableFromHTML(htmlDoc, arLandmarks.ToArray(), statementTitle, statementOccurrenceIndex, outputFile, rowHeadOverrideDict, parameterDict);
+                // Extract the current table
+                string outputFileDirectory = @"c:\temp\10QParseOutput\";        // MAKE ME CONFIGURABLE
+                string outputFileName = outputFileDirectory + ticker + "_" + statementTitle + "_" + titleOccurrence + ".txt";
+                Console.WriteLine("Extracting table " + statementTitle + " to " + outputFileName);
+                ExtractTableFromHTML(htmlDoc, additionalLandmarks, statementTitle, titleOccurrence, outputFileName, rowHeadOverrideDict, parametersDict);
+            }
+        }
+
+        public static string ExtractRegisteredCompanyName(AngleSharp.Dom.Html.IHtmlDocument doc)
+        {
+            var tableSelector = doc.QuerySelectorAll("*");
+            const int ELEMENT_SEARCH_LIMIT = 200;
+
+            int landmarkIndex = findLandmark(tableSelector, 0, "(Exact name of registrant as specified in its charter)");
+            if (landmarkIndex > ELEMENT_SEARCH_LIMIT)
+            {
+                Console.WriteLine("Cannot find registered company landmark in first " + ELEMENT_SEARCH_LIMIT + " elements of html doc");
+                return "";
+            }
+            var landmarkElement = tableSelector[landmarkIndex];
+            var prevElement = landmarkElement.PreviousElementSibling;
+            return prevElement.TextContent;
+        }
+
+        public static string ExtractFormType(AngleSharp.Dom.Html.IHtmlDocument doc)
+        {
+            var tableSelector = doc.QuerySelectorAll("*");
+            const int ELEMENT_SEARCH_LIMIT = 200;
+
+            for (int iElement = 0; iElement < ELEMENT_SEARCH_LIMIT; ++iElement)
+            {
+                var element = tableSelector[iElement];
+                Match m = Regex.Match(element.TextContent.Trim().ToUpper(), @"FORM\s+(10?\s-?\s[KQ])");
+                if (m.Success)
+                {
+                    string capture = m.Groups[1].Captures[0].Value;
+                    return EliminateWhitespace(capture);
                 }
             }
-
-
-
-
+            return "";  // Not found
         }
 
-
-        static void Main(string[] args)
-        {
-            ExtractFromFiling("MMM_mmm-20170630x10q.htm", "MMM","10-Q");
-
-            //ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", 1, @"c:\temp\deere_consolidated_income_3mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
-            //ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED COMPREHENSIVE INCOME", 1, @"c:\temp\deere_consolidated_comprehensive_income_3mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
-            //ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED INCOME", 2, @"c:\temp\deere_consolidated_income_6mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
-            //ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED COMPREHENSIVE INCOME", 2, @"c:\temp\deere_consolidated_comprehensive_income_6mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
-            //ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "CONDENSED CONSOLIDATED BALANCE SHEET", 1, @"c:\temp\deere_balance", null);
-            //ExtractTableFromHTML(@"c:\temp\de-20170430x10q.htm", "STATEMENT OF CONSOLIDATED CASH FLOWS", 1, @"c:\temp\deere_cashflow_6mon", new Dictionary<string, string> { { "UndifferentiatedTotalAssociatesWithPrecedingBoldHeading", "true" } });
-
-            //ExtractTableFromHTML(@"c:\temp\cat_10qx6302017.htm", "Consolidated Statement of Results of Operations", 1, @"c:\temp\cat", null);
-            //ExtractTableFromHTML(@"c:\temp\a17-13367_110q.htm", "CONSOLIDATED STATEMENT OF EARNINGS", 1, @"c:\temp\ibm", null);
-            //ExtractTableFromHTML(@"c:\temp\a10-qq32017712017.htm", "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (Unaudited)", 1, @"c:\temp\apple", null);
-            //ExtractTableFromHTML(@"c:\temp\mdt-2015q3x10q.htm", "CONDENSED CONSOLIDATED STATEMENTS OF EARNINGS", 1, @"c:\temp\medtronic", null);
-            //ExtractTableFromHTML(@"c:\temp\amzn-20170630x10q.htm", "CONSOLIDATED STATEMENTS OF OPERATIONS", 1, @"c:\temp\amazon", null);
-
-            //Console.Write("Done. Press enter to exit");
-            //Console.ReadLine();
-        }
-
-        public static void ExtractTableFromHTML(AngleSharp.Dom.Html.IHtmlDocument doc, string[] landmarks, string statementTitle, int statementInstanceIndex, string outputPath, IDictionary<string, string> rowHeadOverrides, IDictionary<string, string> config)
+        public static void ExtractTableFromHTML(AngleSharp.Dom.Html.IHtmlDocument doc, IList<string> additionalLandmarks, string statementTitle, int statementInstanceIndex, string outputPath, IDictionary<string, string> rowHeadOverrides, IDictionary<string, string> config)
         {
             // Select all the DOM's elements
             var tableSelector = doc.QuerySelectorAll("*");
 
-            // Find the sequential set of landmarks that skip past any undesired occurrences of the statement title before the statement itself (ie in the TOC)
-            int lastLandmarkIndex = findLandmarks(tableSelector, 0, landmarks);
+            int lastLandmarkIndex = 0;
+            if (additionalLandmarks.Count > 0)
+            {
+                // Find the sequential set of landmarks that skip past any undesired occurrences of the statement title before the statement itself (ie in the TOC)
+                lastLandmarkIndex = findLandmarks(tableSelector, 0, additionalLandmarks);
 
-            // Skip past the last landmark found
-            lastLandmarkIndex = skipPastLandmark(tableSelector, lastLandmarkIndex, landmarks[landmarks.Length - 1]);
+                // Skip past the last landmark found
+                lastLandmarkIndex = skipPastLandmark(tableSelector, lastLandmarkIndex, additionalLandmarks[additionalLandmarks.Count - 1]);
+            }
 
             // Find the actual statement title landmark
             lastLandmarkIndex = findLandmark(tableSelector, lastLandmarkIndex, statementTitle);                         
@@ -275,6 +305,10 @@ namespace AngleSharpTest1
             return doc;
         }
 
+        static string getStringValueFromJObject(JObject jObject, string key)
+        {
+            return (jObject[key] != null) ? jObject[key].ToString() : "";
+        }
 
         public static int findLandmark(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elementsToScan, int startingIndex, string landmark)
         {
@@ -289,11 +323,11 @@ namespace AngleSharpTest1
             return -1;  // Not found
         }
 
-        public static int findLandmarks(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elementsToScan, int startingIndex, string[] landmarks)
+        public static int findLandmarks(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elementsToScan, int startingIndex, IList<string> landmarks)
         {
-            if (landmarks == null || landmarks.Length == 0) return startingIndex;
+            if (landmarks == null || landmarks.Count == 0) return startingIndex;
 
-            for (int iLandmark = 0; iLandmark < landmarks.Length; ++iLandmark)
+            for (int iLandmark = 0; iLandmark < landmarks.Count; ++iLandmark)
             {
                 string landmark = landmarks[iLandmark];
                 startingIndex = findLandmark(elementsToScan, startingIndex, landmark);
@@ -301,7 +335,7 @@ namespace AngleSharpTest1
                 {
                     return -1;      // Could not find one of the landmarks
                 }
-                else if (iLandmark != landmarks.Length - 1) // Don't skip past the last landmark found
+                else if (iLandmark != landmarks.Count - 1) // Don't skip past the last landmark found
                 {
                     startingIndex = skipPastLandmark(elementsToScan, startingIndex, landmark);
                 }
@@ -625,6 +659,11 @@ namespace AngleSharpTest1
             return Regex.Replace(s, @"\s+", " ");
         }
 
+        public static string EliminateWhitespace(string s)
+        {
+            return Regex.Replace(s, @"\s+", "");
+        }
+
 
         static private void writeTableToFile(string outputPath, List<TableRow> table)
         {
@@ -818,6 +857,31 @@ namespace AngleSharpTest1
         public override int GetHashCode()
         {
             return new { attribute, time, value }.GetHashCode();
+        }
+    }
+
+    public static class JsonHelper
+    {
+        public static object Deserialize(string json)
+        {
+            return ToObject(JToken.Parse(json));
+        }
+
+        private static object ToObject(JToken token)
+        {
+            switch (token.Type)
+            {
+                case JTokenType.Object:
+                    return token.Children<JProperty>()
+                                .ToDictionary(prop => prop.Name,
+                                              prop => ToObject(prop.Value));
+
+                case JTokenType.Array:
+                    return token.Select(ToObject).ToList();
+
+                default:
+                    return ((JValue)token).Value;
+            }
         }
     }
 }

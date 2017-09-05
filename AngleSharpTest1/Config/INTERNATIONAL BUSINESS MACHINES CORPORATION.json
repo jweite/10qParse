@@ -1,0 +1,34 @@
+﻿{
+  "RegisteredName": "INTERNATIONAL BUSINESS MACHINES CORPORATION",
+  "Ticker": "IBM",
+  "Filings": {
+    "10-Q": {
+      "Tables": [
+        {
+          "StatementTitle": "CONSOLIDATED STATEMENT OF EARNINGS",
+          "TitleOccurrence": 1
+        },
+        {
+          "StatementTitle": "CONSOLIDATED STATEMENT OF COMPREHENSIVE INCOME",
+          "TitleOccurrence": 1
+        },
+        {
+          "StatementTitle": "CONSOLIDATED STATEMENT OF FINANCIAL POSITION",
+          "TitleOccurrence": 1
+        },
+        {
+          "StatementTitle": "CONSOLIDATED STATEMENT OF FINANCIAL POSITION — (CONTINUED)",
+          "TitleOccurrence": 1
+        },
+        {
+          "StatementTitle": "CONSOLIDATED STATEMENT OF CASH FLOWS",
+          "TitleOccurrence": 1
+        },
+        {
+          "StatementTitle": "CONSOLIDATED STATEMENT OF CHANGES IN EQUITY",
+          "TitleOccurrence": 1
+        }
+      ]
+    }
+  }
+}
