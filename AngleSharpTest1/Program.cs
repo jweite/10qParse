@@ -51,8 +51,22 @@ namespace AngleSharpTest1
 
             Console.WriteLine("Extracting Tables from Form " + formType + " for " + registeredCompanyName);
 
-            // Read the config file for this company
             string companyConfigurationFileName = @"config\" + registeredCompanyName + ".json";
+            if (File.Exists(companyConfigurationFileName))
+            {
+                // Use configuration to guide export
+                ExtractFromFilingUsingConfiguration(htmlDoc, companyConfigurationFileName);
+            }
+            else
+            {
+                // Use a more generalized approach
+
+            }
+
+        }
+
+        static void ExtractFromFilingUsingConfiguration(AngleSharp.Dom.Html.IHtmlDocument htmlDoc, string companyConfigurationFileName)
+        {
             string companyConfigJson;
             try
             {
@@ -116,6 +130,7 @@ namespace AngleSharpTest1
                 ExtractTableFromHTML(htmlDoc, additionalLandmarks, statementTitle, titleOccurrence, outputFileName, rowHeadOverrideDict, parametersDict);
             }
         }
+
 
         public static string ExtractRegisteredCompanyName(AngleSharp.Dom.Html.IHtmlDocument doc)
         {
