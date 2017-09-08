@@ -16,10 +16,23 @@ namespace AngleSharpTest1
     {
         static void Main(string[] args)
         {
-            ExtractFromFiling(args[0]);
+            if (File.GetAttributes(args[0]) == FileAttributes.Directory)
+            {
+                var fileNames = Directory.GetFiles(args[0], "*.htm");
+                foreach (string fileName in fileNames)
+                {
+                    ExtractFromFiling(fileName);
+                }
+            }
+            else
+            {
+                ExtractFromFiling(args[0]);
+            }
+
             Console.Write("Done. Press enter to exit");
             Console.ReadLine();
         }
+
 
         static void ExtractFromFiling(string sourceFilePath)
         {
@@ -52,7 +65,7 @@ namespace AngleSharpTest1
             Console.WriteLine("Extracting Tables from Form " + formType + " for " + registeredCompanyName);
 
             string companyConfigurationFileName = @"config\" + registeredCompanyName + ".json";
-            if (File.Exists(companyConfigurationFileName))
+            if (registeredCompanyName.Length > 0 && formType.Length > 0 && File.Exists(companyConfigurationFileName))
             {
                 // Use configuration to guide export
                 ExtractFromFilingUsingConfiguration(htmlDoc, companyConfigurationFileName);
@@ -60,10 +73,107 @@ namespace AngleSharpTest1
             else
             {
                 // Use a more generalized approach
-
+                ExtractFromFilingWithoutConfiguration(htmlDoc, registeredCompanyName, formType);
             }
 
         }
+
+        static void ExtractFromFilingWithoutConfiguration(AngleSharp.Dom.Html.IHtmlDocument htmlDoc, string registeredCompanyName, string formName)
+        {
+            // Select all the DOM's elements
+            var tableSelector = htmlDoc.QuerySelectorAll("*");
+
+            // See if there's a TOC
+            int iElement = findByRegex(tableSelector, 0, @"^united states", RegexOptions.IgnoreCase, 1000);
+            iElement = findByRegex(tableSelector, iElement, @"^table of contents|^index", RegexOptions.IgnoreCase, 1000);
+
+            string notesSectionTitleRegexPattern = @"^(?:Condensed )?notes to .*consolidated (?:condensed )?financial statements|^Supplemental Financial Data";
+            string notesSectionTitle = "";
+            IDictionary<string, string> statementHrefs = new Dictionary<string, string>();
+
+            if (iElement > 0)
+            {
+                Console.WriteLine("Processing TOC");
+                // Get key landmarks from the TOC.  TOC is bounded by the HR that follows it.
+                int lastElementToConsider = iElement + 1000;        // Limit the search
+                for (; iElement < lastElementToConsider && tableSelector[iElement].TagName.ToLower() != "hr"; ++iElement)
+                {
+                    var element = tableSelector[iElement];
+                    if (element.TagName.ToLower() == "a" && Regex.IsMatch(element.TextContent, "statement", RegexOptions.IgnoreCase))
+                    {
+                        string href = element.GetAttribute("href");
+                        statementHrefs.Add(href.Replace("#", ""), element.TextContent.Trim());
+                        iElement = skipPastLandmark(tableSelector, iElement, element.TextContent);
+                    }
+                    if (element.TagName.ToLower() == "a" && Regex.IsMatch(element.TextContent, "balance", RegexOptions.IgnoreCase))
+                    {
+                        string href = element.GetAttribute("href");
+                        statementHrefs.Add(href.Replace("#", ""), element.TextContent.Trim());
+                        iElement = skipPastLandmark(tableSelector, iElement, element.TextContent);
+                    }
+
+                    if (Regex.IsMatch(element.TextContent, notesSectionTitleRegexPattern, RegexOptions.IgnoreCase))
+                    {
+                        // If we find the notes section title in the TOC we use it explicitly for the search below
+                        notesSectionTitle = StandardizeWhitespace(element.TextContent.Trim());
+                        iElement = skipPastRegex(tableSelector, iElement, notesSectionTitleRegexPattern, RegexOptions.IgnoreCase);
+                    }
+                }
+            }
+            else
+            {
+                Console.WriteLine("No TOC found.  Skipping (for now).");
+                return;
+            }
+
+            foreach (var entry in statementHrefs)
+            {
+                Console.WriteLine(entry.Value + " @ " + entry.Key);
+            }
+
+            foreach (var entry in statementHrefs)
+            {
+                string outputFileDirectory = @"c:\temp\10QParseOutput\";        // MAKE ME CONFIGURABLE
+                string outputFileName = outputFileDirectory + registeredCompanyName + "_" + formName + "_" + entry.Value + "_" + entry.Key + ".txt";
+
+                IDictionary<string, string> rowHeadOverrideDict = new Dictionary<string, string>();
+                IDictionary<string, string> parametersDict = new Dictionary<string, string>();
+
+                ExtractTableFromHTML(tableSelector, entry.Key, outputFileName, rowHeadOverrideDict, parametersDict);
+            }
+
+            Console.WriteLine();
+            Console.ReadLine();
+        }
+
+        static void quickSummaryPrint(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elements, int startFrom = 0)
+        {
+            for (int i = startFrom; i < elements.Length; ++i)
+            {
+                var element = elements[i];
+                if (element.TagName.ToLower() == "table")
+                {
+                    var rows = element.QuerySelectorAll("tr");
+                    var cells = element.QuerySelectorAll("td");
+
+                    Console.WriteLine("{0}: table: rows: {1}, cells: {2}", i, rows.Length, cells.Length );
+                    Console.WriteLine(element.TextContent.Substring(0, Math.Min(80, element.TextContent.Length)).Replace("\r", "").Replace("\n", " ").Trim());
+                }
+                if (Regex.IsMatch(element.TextContent, "^(?:Condensed )?notes to .*consolidated (?:condensed )?financial statements|^Supplemental Financial Data", RegexOptions.IgnoreCase))
+                {
+                    Console.WriteLine("{0}: Found notes section title: {1}", i, element.TextContent);
+                }
+                if (Regex.IsMatch(element.TextContent, @"^united states", RegexOptions.IgnoreCase))
+                {
+                    Console.WriteLine("{0}: Found United States", i);
+                }
+                if (Regex.IsMatch(element.TextContent, @"^table of contents|^index", RegexOptions.IgnoreCase))
+                {
+                    Console.WriteLine("{0}: Found TOC landmark: {1}", i, element.TextContent);
+                }
+            }
+        }
+
 
         static void ExtractFromFilingUsingConfiguration(AngleSharp.Dom.Html.IHtmlDocument htmlDoc, string companyConfigurationFileName)
         {
@@ -137,15 +247,28 @@ namespace AngleSharpTest1
             var tableSelector = doc.QuerySelectorAll("*");
             const int ELEMENT_SEARCH_LIMIT = 200;
 
-            int landmarkIndex = findLandmark(tableSelector, 0, "(Exact name of registrant as specified in its charter)");
-            if (landmarkIndex > ELEMENT_SEARCH_LIMIT)
+            string pattern = "^commission file n";
+            int landmarkIndex = findByRegex(tableSelector, 0, pattern, RegexOptions.IgnoreCase);
+            if (landmarkIndex > ELEMENT_SEARCH_LIMIT || landmarkIndex < 0)
             {
                 Console.WriteLine("Cannot find registered company landmark in first " + ELEMENT_SEARCH_LIMIT + " elements of html doc");
                 return "";
             }
-            var landmarkElement = tableSelector[landmarkIndex];
-            var prevElement = landmarkElement.PreviousElementSibling;
-            return prevElement.TextContent;
+            int postLandmarkIndex = skipPastRegex(tableSelector, landmarkIndex, pattern, RegexOptions.IgnoreCase);
+
+            // Sometimes there's _____ or file number, etc. in between the landmark and the company name.  
+            //  Skip past any elements that doesn't have at least two alphabetic characters in its text.
+            postLandmarkIndex = skipPastRegex(tableSelector, postLandmarkIndex, "[^A-Za-z]{2}", RegexOptions.IgnoreCase);
+
+            for (int i = postLandmarkIndex; postLandmarkIndex < ELEMENT_SEARCH_LIMIT; ++i )
+            {
+                var element = tableSelector[i];
+                if (element.TextContent.Trim().Length > 0)
+                {
+                    return element.TextContent.Trim();
+                }
+            }
+            return "";
         }
 
         public static string ExtractFormType(AngleSharp.Dom.Html.IHtmlDocument doc)
@@ -156,7 +279,7 @@ namespace AngleSharpTest1
             for (int iElement = 0; iElement < ELEMENT_SEARCH_LIMIT; ++iElement)
             {
                 var element = tableSelector[iElement];
-                Match m = Regex.Match(element.TextContent.Trim().ToUpper(), @"FORM\s+(10?\s-?\s[KQ])");
+                Match m = Regex.Match(element.TextContent.Trim().ToUpper(), @"FORM\s+(10\s?-\s?[KQ])");
                 if (m.Success)
                 {
                     string capture = m.Groups[1].Captures[0].Value;
@@ -165,6 +288,40 @@ namespace AngleSharpTest1
             }
             return "";  // Not found
         }
+
+        public static void ExtractTableFromHTML(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elements, string statementTitleHref, string outputPath, IDictionary<string, string> rowHeadOverrides, IDictionary<string, string> config)
+        {
+            // Find the href'd element
+            int iElement = 0;
+            for (; iElement < elements.Length; ++iElement)
+            {
+                var element = elements[iElement];
+                if (element.GetAttribute("name") == statementTitleHref)
+                {
+                    break;
+                }
+            }
+            if (iElement == elements.Length)
+            {
+                Console.WriteLine("Unable to find expected element with name {0}", statementTitleHref);
+            }
+
+            // See if that landmark is contained by a table (assumed, then, to be the statement table)
+            int statementTableIndex = findContainingElementByType(elements, iElement, "table");
+            if (statementTableIndex == -1)
+            {
+                // Landmark is not contained in a table, so statement table is assumed to be first table following the landmark.
+                statementTableIndex = findFollowingElementByType(elements, iElement, "table");
+            }
+            if (statementTableIndex == -1)
+            {
+                Console.WriteLine("No landmarked table found");
+                return;
+            }
+
+            ExtractTableFromHTML(elements, statementTableIndex, outputPath, rowHeadOverrides, config);
+        }
+
 
         public static void ExtractTableFromHTML(AngleSharp.Dom.Html.IHtmlDocument doc, IList<string> additionalLandmarks, string statementTitle, int statementInstanceIndex, string outputPath, IDictionary<string, string> rowHeadOverrides, IDictionary<string, string> config)
         {
@@ -182,7 +339,7 @@ namespace AngleSharpTest1
             }
 
             // Find the actual statement title landmark
-            lastLandmarkIndex = findLandmark(tableSelector, lastLandmarkIndex, statementTitle);                         
+            lastLandmarkIndex = findLandmark(tableSelector, lastLandmarkIndex, statementTitle);
 
             // See if that landmark is contained by a table (assumed, then, to be the statement table)
             int statementTableIndex = findContainingElementByType(tableSelector, lastLandmarkIndex, "table");
@@ -196,8 +353,14 @@ namespace AngleSharpTest1
                 Console.WriteLine("No landmarked table found");
                 return;
             }
-            var statementTable = tableSelector[statementTableIndex];
 
+            ExtractTableFromHTML(tableSelector, statementTableIndex, outputPath, rowHeadOverrides, config);
+        }
+
+
+        public static void ExtractTableFromHTML(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elements, int tableIndex, string outputPath, IDictionary<string, string> rowHeadOverrides, IDictionary<string, string> config)
+        {
+            var statementTable = elements[tableIndex];
 
             // Parse statement table just found into a 2d matrix (actually a list of TableRow objects, which contain a list of TableCell objects)
             var tableData = new List<TableRow>();
@@ -330,7 +493,36 @@ namespace AngleSharpTest1
             for (int iElement = startingIndex; iElement < elementsToScan.Length; ++iElement)
             {
                 var element = elementsToScan[iElement];
-                if (element.TextContent.Trim() == landmark)
+                if (element.TextContent == landmark)
+                {
+                    return iElement;
+                }
+            }
+            return -1;  // Not found
+        }
+        public static int findByRegex(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elementsToScan, int startingIndex, string pattern, RegexOptions regexOptions, int elementLimit = -1)
+        {
+            int lastElement = (elementLimit < 0) ? elementsToScan.Length : startingIndex + elementLimit;
+
+            for (int iElement = startingIndex; iElement < lastElement; ++iElement)
+            {
+                var element = elementsToScan[iElement];
+                if (Regex.IsMatch(element.TextContent, pattern, regexOptions))
+                {
+                    return iElement;
+                }
+            }
+            return -1;  // Not found
+        }
+
+        public static int findNextElementOfType(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elementsToScan, int startingIndex, string type, int elementLimit = -1)
+        {
+            int lastElement = (elementLimit < 0) ? elementsToScan.Length : startingIndex + elementLimit;
+            type = type.ToLower();
+            for (int iElement = startingIndex; iElement < lastElement; ++iElement)
+            {
+                var element = elementsToScan[iElement];
+                if (element.TagName.ToLower() == type)
                 {
                     return iElement;
                 }
@@ -398,10 +590,19 @@ namespace AngleSharpTest1
         public static int skipPastLandmark(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elementsToScan, int startingIndex, string landmark)
         {
             int iElement;
-            for (iElement = startingIndex; iElement < elementsToScan.Length && elementsToScan[iElement].TextContent.Trim() == landmark; ++iElement)
+            for (iElement = startingIndex; iElement < elementsToScan.Length && elementsToScan[iElement].TextContent.Trim() == landmark.Trim(); ++iElement)
                 ;
             return iElement;
         }
+
+        public static int skipPastRegex(AngleSharp.Dom.IHtmlCollection<AngleSharp.Dom.IElement> elementsToScan, int startingIndex, string pattern, RegexOptions regexOptions)
+        {
+            int iElement;
+            for (iElement = startingIndex; iElement < elementsToScan.Length && Regex.IsMatch(elementsToScan[iElement].TextContent.Trim(), pattern, regexOptions); ++iElement)
+                ;
+            return iElement;
+        }
+
 
         public static bool GetConfigBool(string key, IDictionary<string, string>configDict)
         {
@@ -674,6 +875,11 @@ namespace AngleSharpTest1
             return Regex.Replace(s, @"\s+", " ");
         }
 
+        public static string StandardizeWhitespace(string s)
+        {
+            return Regex.Replace(s, @"\s", " ");
+        }
+
         public static string EliminateWhitespace(string s)
         {
             return Regex.Replace(s, @"\s+", "");
@@ -735,7 +941,14 @@ namespace AngleSharpTest1
             }
 
             // Take other attributes from deepest last-sibling element that offers it.
-            if (element.Style.TextAlign.ToLower() == "left")
+
+
+            //********************************************************************************************
+            // IF THE ELEMENT IS A TD THEN IT HAS AN ALIGN ATTRIBUTE THAT NEEDS to BE CONSIDERED HERE TOO!
+            //********************************************************************************************
+            
+
+            if (element.Style.TextAlign.ToLower() == "left"))
             {
                 HorizontalAlignment = HORIZONTAL_ALIGNMENT.LEFT;
             }
