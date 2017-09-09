@@ -943,20 +943,15 @@ namespace AngleSharpTest1
             // Take other attributes from deepest last-sibling element that offers it.
 
 
-            //********************************************************************************************
-            // IF THE ELEMENT IS A TD THEN IT HAS AN ALIGN ATTRIBUTE THAT NEEDS to BE CONSIDERED HERE TOO!
-            //********************************************************************************************
-            
-
-            if (element.Style.TextAlign.ToLower() == "left"))
+            if (element.GetAttribute(AngleSharp.Html.AttributeNames.Align) == "left" || element.Style.TextAlign.ToLower() == "left")
             {
                 HorizontalAlignment = HORIZONTAL_ALIGNMENT.LEFT;
             }
-            else if (element.Style.TextAlign.ToLower() == "center")
+            else if (element.GetAttribute(AngleSharp.Html.AttributeNames.Align) == "center" || element.Style.TextAlign.ToLower() == "center")
             {
                 HorizontalAlignment = HORIZONTAL_ALIGNMENT.CENTER;
             }
-            else if (element.Style.TextAlign.ToLower() == "right")
+            else if (element.GetAttribute(AngleSharp.Html.AttributeNames.Align) == "right" || element.Style.TextAlign.ToLower() == "right")
             {
                 HorizontalAlignment = HORIZONTAL_ALIGNMENT.RIGHT;
             }
